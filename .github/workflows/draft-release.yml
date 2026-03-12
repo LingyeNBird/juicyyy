@@ -71,9 +71,7 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BIN="${BIN}.exe"
           fi
-          ARCHIVE="juicyyy-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
           echo "bin=${BIN}" >> "$GITHUB_OUTPUT"
-          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
 
       - name: Build executable
         shell: bash
@@ -82,17 +80,11 @@ jobs:
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
             go build -trimpath -ldflags="-s -w" -o "dist/${{ steps.names.outputs.bin }}" .
 
-      - name: Pack artifact
-        shell: bash
-        run: |
-          cd dist
-          zip -j "${{ steps.names.outputs.archive }}" "${{ steps.names.outputs.bin }}"
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: artifact-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/${{ steps.names.outputs.archive }}
+          path: dist/${{ steps.names.outputs.bin }}
           if-no-files-found: error
 
   release:
