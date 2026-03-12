@@ -1,0 +1,10 @@
+# Build outputs
+*.exe
+*.test
+*.out
+
+# Local runtime data
+juicy-providers.json
+
+# Local research artifacts
+_research/
