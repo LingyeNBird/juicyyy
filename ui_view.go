@@ -56,19 +56,8 @@ func (m appModel) listView() string {
 		"",
 		body,
 	)
-	view := m.renderViewWithBottomBar(mainContent, bottomContent)
-	m.logListLayout(
-		lipgloss.Height(header),
-		lipgloss.Height(bottomContent),
-		bodyHeight,
-		lipgloss.Height(providerPane),
-		lipgloss.Height(resultPane),
-		lipgloss.Height(body),
-		lipgloss.Height(mainContent),
-		lipgloss.Height(view),
-	)
 
-	return view
+	return m.renderViewWithBottomBar(mainContent, bottomContent)
 }
 
 func (m appModel) listBottomContent() string {
@@ -94,16 +83,8 @@ func (m appModel) formView() string {
 		m.statusLine(),
 		renderShortcutFooter(m.tr("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英", "Keys: tab/shift+tab move | enter save | esc cancel | l toggle lang")),
 	)
-	view := m.renderViewWithBottomBar(formPane, bottomContent)
-	m.logFormLayout(
-		paneWidth,
-		lipgloss.Height(formPane),
-		lipgloss.Height(bottomContent),
-		lipgloss.Height(formPane),
-		lipgloss.Height(view),
-	)
 
-	return view
+	return m.renderViewWithBottomBar(formPane, bottomContent)
 }
 
 func (m appModel) renderViewWithBottomBar(mainContent, bottomContent string) string {

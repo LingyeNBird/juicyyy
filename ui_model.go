@@ -48,7 +48,6 @@ const (
 type appModel struct {
 	config       appConfig
 	configPath   string
-	debug        *debugOutput
 	lang         appLanguage
 	mode         viewMode
 	cursor       int
@@ -74,7 +73,6 @@ func newModel(cfg appConfig, configPath string) appModel {
 	m := appModel{
 		config:      cfg,
 		configPath:  configPath,
-		debug:       activeDebugOutput,
 		lang:        langZH,
 		mode:        listMode,
 		inputs:      inputs,
