@@ -80,13 +80,13 @@ func (m appModel) listBottomContent() string {
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.statusLine(),
-		renderShortcutFooter(m.tr("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出", "Keys: tab edit prompt | a add provider | enter run checks | j/k move | l toggle lang | q quit")),
+		renderShortcutFooter(m.tr("快捷键：Tab 编辑提示词 | a 新增供应商 | e 编辑供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出", "Keys: tab edit prompt | a add provider | e edit provider | enter run checks | j/k move | l toggle lang | q quit")),
 	)
 }
 
 func (m appModel) formView() string {
 	return m.renderSplitView(
-		m.tr("新增供应商", "Add Provider"),
+		m.formPaneTitle(),
 		addProviderPaneBorderColor,
 		m.formPaneBody(),
 		m.formBottomContent(),
@@ -99,7 +99,7 @@ func (m appModel) formPaneBody() string {
 	syncModelsInputLayout(&m.modelsInput, paneWidth)
 
 	sections := []string{
-		helperTextStyle.Render(m.tr("请填写 OAI 兼容 base URL、API key，以及支持逗号或换行的模型列表。", "Fill in an OAI-compatible base URL, API key, and models separated by commas or new lines.")),
+		helperTextStyle.Render(m.formIntroText()),
 	}
 	sections = append(sections,
 		m.renderFormField(formFields[addProviderBaseURLField], m.baseURLInput.View()),
@@ -113,10 +113,31 @@ func (m appModel) formPaneBody() string {
 func (m appModel) formBottomContent() string {
 	bottomContent := lipgloss.JoinVertical(lipgloss.Left,
 		m.statusLine(),
-		renderShortcutFooter(m.tr("快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | enter saves on Base URL/API Key | enter adds a new line in Models | esc cancel | ctrl+l toggle lang")),
+		renderShortcutFooter(m.formFooterText()),
 	)
 
 	return bottomContent
+}
+
+func (m appModel) formPaneTitle() string {
+	if m.isEditingProvider() {
+		return m.tr("编辑供应商", "Edit Provider")
+	}
+	return m.tr("新增供应商", "Add Provider")
+}
+
+func (m appModel) formIntroText() string {
+	if m.isEditingProvider() {
+		return m.tr("修改当前供应商的 OAI 兼容 base URL、API key，以及支持逗号或换行的模型列表。", "Update the selected provider's OAI-compatible base URL, API key, and models separated by commas or new lines.")
+	}
+	return m.tr("请填写 OAI 兼容 base URL、API key，以及支持逗号或换行的模型列表。", "Fill in an OAI-compatible base URL, API key, and models separated by commas or new lines.")
+}
+
+func (m appModel) formFooterText() string {
+	if m.isEditingProvider() {
+		return m.tr("快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 更新 | 模型框 Enter 换行 | Esc 取消编辑 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | enter updates on Base URL/API Key | enter adds a new line in Models | esc cancel edit | ctrl+l toggle lang")
+	}
+	return m.tr("快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | enter saves on Base URL/API Key | enter adds a new line in Models | esc cancel | ctrl+l toggle lang")
 }
 
 func (m appModel) renderViewWithBottomBar(mainContent, bottomContent string) string {

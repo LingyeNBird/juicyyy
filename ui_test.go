@@ -626,6 +626,282 @@ func TestModelAddProviderSaveFailureRollsBackProviderAppend(t *testing.T) {
 	}
 }
 
+func TestModelEditProviderWithNoProvidersShowsWarningAndStaysInListMode(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+
+	updated, cmd := m.Update(keyRunes('e'))
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.mode != listMode {
+		t.Fatalf("expected list mode, got %v", got.mode)
+	}
+	if got.editingIndex != noEditingProviderIndex {
+		t.Fatalf("expected no editing target, got %d", got.editingIndex)
+	}
+	if got.status != "还没有可编辑的供应商，请先新增。" {
+		t.Fatalf("unexpected status: %q", got.status)
+	}
+	if got.statusKind != statusWarning {
+		t.Fatalf("expected warning status kind, got %v", got.statusKind)
+	}
+}
+
+func TestModelEditModePrefillsSelectedProviderAndReusesSharedPane(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{
+		BaseURL: "https://one.example.com/v1",
+		APIKey:  "first-secret",
+		Models:  []string{"gpt-4o-mini"},
+	}, {
+		BaseURL: "https://two.example.com/v1",
+		APIKey:  "second-secret",
+		Models:  []string{"qwen-max", "claude-3.5-sonnet"},
+	}}}, "juicy-providers.json")
+	m.cursor = 1
+	m.width = 100
+	m.height = 24
+
+	updated, cmd := m.Update(keyRunes('e'))
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.mode != addMode {
+		t.Fatalf("expected shared form mode, got %v", got.mode)
+	}
+	if got.editingIndex != 1 {
+		t.Fatalf("expected editing index 1, got %d", got.editingIndex)
+	}
+	if got.baseURLInput.Value() != "https://two.example.com/v1" {
+		t.Fatalf("unexpected prefilled Base URL: %q", got.baseURLInput.Value())
+	}
+	if got.apiKeyInput.Value() != "second-secret" {
+		t.Fatalf("unexpected prefilled API key: %q", got.apiKeyInput.Value())
+	}
+	if got.modelsInput.Value() != "qwen-max\nclaude-3.5-sonnet" {
+		t.Fatalf("unexpected prefilled models: %q", got.modelsInput.Value())
+	}
+
+	view := got.View()
+	assertContainsAll(t, view,
+		renderPaneTitle("供应商"),
+		renderPaneTitle("编辑供应商"),
+		selectionStyle.Render("https://two.example.com/v1（2 个模型）"),
+		"qwen-max",
+		"claude-3.5-sonnet",
+		renderShortcutFooter(editModeFooterText()),
+	)
+	if strings.Contains(view, renderPaneTitle("结果")) {
+		t.Fatalf("expected shared form pane to replace results pane: %q", view)
+	}
+	assertContainsAll(t, view,
+		"修改当前供应商的 OAI 兼容 base URL、API",
+		"key，以及支持逗号或换行的模型列表。",
+	)
+}
+
+func TestModelEditSaveUpdatesProviderInPlace(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "providers.json")
+	initial := appConfig{Providers: []provider{{
+		BaseURL: "https://one.example.com/v1",
+		APIKey:  "first-secret",
+		Models:  []string{"gpt-4o-mini"},
+	}, {
+		BaseURL: "https://two.example.com/v1",
+		APIKey:  "second-secret",
+		Models:  []string{"qwen-max"},
+	}}}
+	if err := saveConfig(configPath, initial); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	m := newModel(initial, configPath)
+	m.cursor = 1
+
+	updated, _ := m.Update(keyRunes('e'))
+	got := updated.(appModel)
+	got.baseURLInput.SetValue("https://updated.example.com/v1/")
+	got.apiKeyInput.SetValue("updated-secret")
+	got.modelsInput.SetValue("qwen-max\nclaude-3.5-sonnet")
+	setFocusedFormField(&got, addProviderAPIKeyField)
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	saved := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if saved.mode != listMode {
+		t.Fatalf("expected list mode, got %v", saved.mode)
+	}
+	if len(saved.config.Providers) != 2 {
+		t.Fatalf("expected provider count to remain 2, got %d", len(saved.config.Providers))
+	}
+	if saved.config.Providers[0].BaseURL != initial.Providers[0].BaseURL || saved.config.Providers[0].APIKey != initial.Providers[0].APIKey || len(saved.config.Providers[0].Models) != len(initial.Providers[0].Models) || saved.config.Providers[0].Models[0] != initial.Providers[0].Models[0] {
+		t.Fatalf("expected first provider unchanged, got %+v", saved.config.Providers[0])
+	}
+	if saved.config.Providers[1].BaseURL != "https://updated.example.com/v1" {
+		t.Fatalf("unexpected updated Base URL: %q", saved.config.Providers[1].BaseURL)
+	}
+	if saved.config.Providers[1].APIKey != "updated-secret" {
+		t.Fatalf("unexpected updated API key: %q", saved.config.Providers[1].APIKey)
+	}
+	if gotModels, wantModels := saved.config.Providers[1].Models, []string{"qwen-max", "claude-3.5-sonnet"}; len(gotModels) != len(wantModels) || gotModels[0] != wantModels[0] || gotModels[1] != wantModels[1] {
+		t.Fatalf("unexpected updated models: got %#v want %#v", gotModels, wantModels)
+	}
+	if saved.status != "已更新供应商 https://updated.example.com/v1，共 2 个模型。" {
+		t.Fatalf("unexpected status: %q", saved.status)
+	}
+	if saved.statusKind != statusSuccess {
+		t.Fatalf("expected success status kind, got %v", saved.statusKind)
+	}
+
+	loaded, err := loadConfig(configPath)
+	if err != nil {
+		t.Fatalf("load saved config: %v", err)
+	}
+	if len(loaded.Providers) != 2 {
+		t.Fatalf("expected persisted provider count 2, got %d", len(loaded.Providers))
+	}
+	if loaded.Providers[1].BaseURL != "https://updated.example.com/v1" {
+		t.Fatalf("unexpected persisted Base URL: %q", loaded.Providers[1].BaseURL)
+	}
+}
+
+func TestModelEditSavePreservesCursorSelection(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "providers.json")
+	initial := appConfig{Providers: []provider{{
+		BaseURL: "https://one.example.com/v1",
+		APIKey:  "first-secret",
+		Models:  []string{"gpt-4o-mini"},
+	}, {
+		BaseURL: "https://two.example.com/v1",
+		APIKey:  "second-secret",
+		Models:  []string{"qwen-max"},
+	}}}
+	if err := saveConfig(configPath, initial); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	m := newModel(initial, configPath)
+	m.width = 100
+	m.cursor = 1
+
+	updated, _ := m.Update(keyRunes('e'))
+	got := updated.(appModel)
+	got.modelsInput.SetValue("qwen-max\nclaude-3.5-sonnet")
+	setFocusedFormField(&got, addProviderAPIKeyField)
+
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	saved := updated.(appModel)
+
+	if saved.cursor != 1 {
+		t.Fatalf("expected cursor to remain on edited provider, got %d", saved.cursor)
+	}
+	view := saved.View()
+	if !strings.Contains(view, selectionStyle.Render("https://two.example.com/v1（2 个模型）")) {
+		t.Fatalf("expected edited provider to remain selected in list view: %q", view)
+	}
+}
+
+func TestModelEditSaveFailureRollsBackAndStaysInFormMode(t *testing.T) {
+	original := provider{
+		BaseURL: "https://one.example.com/v1",
+		APIKey:  "first-secret",
+		Models:  []string{"gpt-4o-mini"},
+	}
+	m := newModel(appConfig{Providers: []provider{original}}, t.TempDir())
+	m.cursor = 0
+
+	updated, _ := m.Update(keyRunes('e'))
+	got := updated.(appModel)
+	got.baseURLInput.SetValue("https://updated.example.com/v1")
+	got.apiKeyInput.SetValue("updated-secret")
+	got.modelsInput.SetValue("qwen-max")
+	setFocusedFormField(&got, addProviderAPIKeyField)
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	failed := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if failed.mode != addMode {
+		t.Fatalf("expected to remain in shared form mode, got %v", failed.mode)
+	}
+	if failed.editingIndex != 0 {
+		t.Fatalf("expected editing index preserved, got %d", failed.editingIndex)
+	}
+	if len(failed.config.Providers) != 1 {
+		t.Fatalf("expected provider count unchanged, got %d", len(failed.config.Providers))
+	}
+	if failed.config.Providers[0].BaseURL != original.BaseURL || failed.config.Providers[0].APIKey != original.APIKey || len(failed.config.Providers[0].Models) != len(original.Models) || failed.config.Providers[0].Models[0] != original.Models[0] {
+		t.Fatalf("expected provider rollback, got %+v", failed.config.Providers[0])
+	}
+	if failed.baseURLInput.Value() != "https://updated.example.com/v1" {
+		t.Fatalf("expected edited Base URL to remain in form, got %q", failed.baseURLInput.Value())
+	}
+	if !strings.HasPrefix(failed.status, "更新供应商失败：") {
+		t.Fatalf("unexpected status: %q", failed.status)
+	}
+	if failed.statusKind != statusError {
+		t.Fatalf("expected error status kind, got %v", failed.statusKind)
+	}
+}
+
+func TestModelEditModeEscCancelsAndPreservesSelection(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{
+		BaseURL: "https://one.example.com/v1",
+		APIKey:  "first-secret",
+		Models:  []string{"gpt-4o-mini"},
+	}, {
+		BaseURL: "https://two.example.com/v1",
+		APIKey:  "second-secret",
+		Models:  []string{"qwen-max"},
+	}}}, "juicy-providers.json")
+	m.width = 100
+	m.cursor = 1
+
+	updated, _ := m.Update(keyRunes('e'))
+	got := updated.(appModel)
+	got.baseURLInput.SetValue("https://unsaved.example.com/v1")
+
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	canceled := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if canceled.mode != listMode {
+		t.Fatalf("expected list mode, got %v", canceled.mode)
+	}
+	if canceled.cursor != 1 {
+		t.Fatalf("expected cursor to stay on edited provider, got %d", canceled.cursor)
+	}
+	if canceled.editingIndex != noEditingProviderIndex {
+		t.Fatalf("expected editing context cleared, got %d", canceled.editingIndex)
+	}
+	if canceled.status != "已取消编辑供应商。" {
+		t.Fatalf("unexpected status: %q", canceled.status)
+	}
+	if canceled.statusKind != statusInfo {
+		t.Fatalf("expected info status kind, got %v", canceled.statusKind)
+	}
+	view := canceled.View()
+	if !strings.Contains(view, renderPaneTitle("结果")) {
+		t.Fatalf("expected results pane restored after cancel: %q", view)
+	}
+	if strings.Contains(view, renderPaneTitle("编辑供应商")) {
+		t.Fatalf("expected edit pane removed after cancel: %q", view)
+	}
+	if !strings.Contains(view, selectionStyle.Render("https://two.example.com/v1（1 个模型）")) {
+		t.Fatalf("expected edited provider selection preserved in view: %q", view)
+	}
+}
+
 func TestModelRunningBlocksListActions(t *testing.T) {
 	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", Models: []string{"a"}}, {BaseURL: "https://two", Models: []string{"b"}}}}, "juicy-providers.json")
 	m.cursor = 1
@@ -639,6 +915,30 @@ func TestModelRunningBlocksListActions(t *testing.T) {
 	}
 	if got.cursor != 1 {
 		t.Fatalf("expected cursor unchanged, got %d", got.cursor)
+	}
+	if got.status != "检测进行中，请等待完成后再切换或操作。" {
+		t.Fatalf("unexpected status: %q", got.status)
+	}
+	if got.statusKind != statusWarning {
+		t.Fatalf("expected warning status kind, got %v", got.statusKind)
+	}
+}
+
+func TestModelRunningBlocksEditEntry(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", Models: []string{"a"}}}}, "juicy-providers.json")
+	m.running = true
+
+	updated, cmd := m.Update(keyRunes('e'))
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.mode != listMode {
+		t.Fatalf("expected list mode, got %v", got.mode)
+	}
+	if got.editingIndex != noEditingProviderIndex {
+		t.Fatalf("expected no editing target, got %d", got.editingIndex)
 	}
 	if got.status != "检测进行中，请等待完成后再切换或操作。" {
 		t.Fatalf("unexpected status: %q", got.status)
@@ -1065,7 +1365,7 @@ func TestListViewUsesSharedHeadersAndEmptyStates(t *testing.T) {
 			if !strings.Contains(view, "暂无结果，请先选择供应商并按") || !strings.Contains(view, "Enter。") {
 				t.Fatalf("expected result empty state in view: %q", view)
 			}
-			if !strings.Contains(view, renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出")) {
+			if !strings.Contains(view, renderShortcutFooter(listModeFooterText())) {
 				t.Fatalf("expected shortcut footer in view: %q", view)
 			}
 		})
@@ -1128,7 +1428,7 @@ func TestListViewKeepsResultsPaneAboveBottomBarAcrossViewportHeights(t *testing.
 			if got := lipgloss.Height(view); got != m.height {
 				t.Fatalf("expected view height %d, got %d", m.height, got)
 			}
-			if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+			if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter(listModeFooterText()) {
 				t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
 			}
 			if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
@@ -1167,7 +1467,7 @@ func TestListViewKeepsFooterPinnedWhenProviderTextWraps(t *testing.T) {
 	if got := lipgloss.Height(view); got != m.height {
 		t.Fatalf("expected view height %d, got %d", m.height, got)
 	}
-	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter(listModeFooterText()) {
 		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
 	}
 	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
@@ -1202,7 +1502,7 @@ func TestListViewClampsGracefullyForZeroAndSmallHeights(t *testing.T) {
 				view := m.listView()
 				lines := strings.Split(view, "\n")
 
-				if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+				if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter(listModeFooterText()) {
 					t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
 				}
 				if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
@@ -1247,7 +1547,7 @@ func TestListViewKeepsFooterPinnedWhenProviderContentIsTall(t *testing.T) {
 	if got := lipgloss.Height(view); got != m.height {
 		t.Fatalf("expected view height %d, got %d", m.height, got)
 	}
-	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter(listModeFooterText()) {
 		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
 	}
 	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
@@ -1436,7 +1736,7 @@ func TestViewSwitchesOnlyRightPaneInAddMode(t *testing.T) {
 	if !strings.Contains(addView, "请填写 OAI 兼容 base URL、API") || !strings.Contains(addView, "key，以及支持逗号或换行的模型列表。") {
 		t.Fatalf("expected multiline intro in add view: %q", addView)
 	}
-	if !strings.Contains(addView, renderShortcutFooter("快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英")) {
+	if !strings.Contains(addView, renderShortcutFooter(addModeFooterText())) {
 		t.Fatalf("expected form shortcuts in add mode footer: %q", addView)
 	}
 }
@@ -1452,7 +1752,7 @@ func TestFormViewPinsStatusAndFooterToBottomWhenHeightAvailable(t *testing.T) {
 	lines := strings.Split(view, "\n")
 	bottomHeight := lipgloss.Height(m.formBottomContent())
 	border := lipgloss.RoundedBorder()
-	footer := renderShortcutFooter("快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英")
+	footer := renderShortcutFooter(addModeFooterText())
 
 	if got := lipgloss.Height(view); got != m.height {
 		t.Fatalf("expected view height %d, got %d", m.height, got)
@@ -1493,7 +1793,7 @@ func TestFormViewPinsFooterWithMultilineModelsUnderTightHeight(t *testing.T) {
 	lines := strings.Split(view, "\n")
 	bottomHeight := lipgloss.Height(m.formBottomContent())
 	border := lipgloss.RoundedBorder()
-	footer := renderShortcutFooter("快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英")
+	footer := renderShortcutFooter(addModeFooterText())
 
 	if got := lipgloss.Height(view); got != m.height {
 		t.Fatalf("expected view height %d, got %d", m.height, got)
@@ -1545,4 +1845,16 @@ func setFocusedFormField(m *appModel, index int) {
 	m.modelsInput.Blur()
 	m.focusIndex = index
 	m.focusCurrentInput()
+}
+
+func listModeFooterText() string {
+	return "快捷键：Tab 编辑提示词 | a 新增供应商 | e 编辑供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出"
+}
+
+func addModeFooterText() string {
+	return "快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英"
+}
+
+func editModeFooterText() string {
+	return "快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 更新 | 模型框 Enter 换行 | Esc 取消编辑 | Ctrl+L 切换中英"
 }

@@ -65,7 +65,7 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.focusPromptInput()
 		return m, nil
-	case "up", "k", "down", "j", "a", "enter":
+	case "up", "k", "down", "j", "a", "e", "enter":
 		if m.running {
 			m.setStatus(statusWarning, m.tr("检测进行中，请等待完成后再切换或操作。", "Checks are still running. Wait for completion before changing providers."))
 			return m, nil
@@ -83,6 +83,12 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "a":
 		m.enterAddMode()
+	case "e":
+		if len(m.config.Providers) == 0 {
+			m.setStatus(statusWarning, m.tr("还没有可编辑的供应商，请先新增。", "No providers to edit yet. Add one first."))
+			return m, nil
+		}
+		m.enterEditMode(m.cursor)
 	case "enter":
 		if len(m.config.Providers) == 0 {
 			m.setStatus(statusWarning, m.tr("请先新增至少一个供应商后再检测。", "Add at least one provider before running checks."))
@@ -97,7 +103,7 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m appModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.cancelAddMode()
+		m.cancelFormMode()
 		return m, nil
 	case "tab", "shift+tab", "up", "down":
 		if m.focusIndex == addProviderModelsField && (msg.String() == "up" || msg.String() == "down") {
@@ -114,15 +120,17 @@ func (m appModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setStatus(statusError, err.Error())
 			return m, nil
 		}
-		if err := m.saveProvider(provider); err != nil {
-			m.setStatus(statusError, fmt.Sprintf(m.tr("保存配置失败：%v", "Save config failed: %v"), err))
+		savedIndex, err := m.saveProvider(provider)
+		if err != nil {
+			m.setStatus(statusError, m.formSaveFailureStatus(err))
 			return m, nil
 		}
+		successStatus := m.formSaveSuccessStatus(provider)
 
 		m.mode = listMode
-		m.cursor = len(m.config.Providers) - 1
+		m.cursor = savedIndex
 		m.resetForm()
-		m.setStatus(statusSuccess, fmt.Sprintf(m.tr("已保存供应商 %s，共 %d 个模型。", "Saved provider %s with %d model(s)."), provider.BaseURL, len(provider.Models)))
+		m.setStatus(statusSuccess, successStatus)
 		return m, nil
 	}
 
@@ -166,8 +174,27 @@ func (m *appModel) enterAddMode() {
 	m.setStatus(statusInfo, m.tr("新增供应商：模型支持逗号或换行；在基础 URL 或 API 密钥上按回车保存，Esc 取消。", "Add a provider. Models accept commas or new lines; press Enter on Base URL or API Key to save, or Esc to cancel."))
 }
 
-func (m *appModel) cancelAddMode() {
+func (m *appModel) enterEditMode(index int) {
+	if index < 0 || index >= len(m.config.Providers) {
+		m.setStatus(statusWarning, m.tr("当前没有可编辑的供应商。", "There is no provider to edit."))
+		return
+	}
+
+	m.blurPromptInput()
+	m.mode = addMode
+	m.editingIndex = index
+	m.preloadForm(m.config.Providers[index])
+	m.setStatus(statusInfo, m.tr("编辑供应商：修改基础 URL、API 密钥和模型；在基础 URL 或 API 密钥上按回车更新，Esc 取消。", "Edit the selected provider. Update the base URL, API key, and models; press Enter on Base URL or API Key to save, or Esc to cancel."))
+}
+
+func (m *appModel) cancelFormMode() {
+	wasEditing := m.isEditingProvider()
 	m.mode = listMode
+	m.resetForm()
+	if wasEditing {
+		m.setStatus(statusInfo, m.tr("已取消编辑供应商。", "Canceled editing provider."))
+		return
+	}
 	m.setStatus(statusInfo, m.tr("已取消新增供应商。", "Canceled adding provider."))
 }
 
@@ -210,11 +237,35 @@ func (m *appModel) buildProviderFromInputs() (provider, error) {
 	}, nil
 }
 
-func (m *appModel) saveProvider(provider provider) error {
+func (m appModel) formSaveSuccessStatus(provider provider) string {
+	if m.isEditingProvider() {
+		return fmt.Sprintf(m.tr("已更新供应商 %s，共 %d 个模型。", "Updated provider %s with %d model(s)."), provider.BaseURL, len(provider.Models))
+	}
+	return fmt.Sprintf(m.tr("已保存供应商 %s，共 %d 个模型。", "Saved provider %s with %d model(s)."), provider.BaseURL, len(provider.Models))
+}
+
+func (m appModel) formSaveFailureStatus(err error) string {
+	if m.isEditingProvider() {
+		return fmt.Sprintf(m.tr("更新供应商失败：%v", "Update provider failed: %v"), err)
+	}
+	return fmt.Sprintf(m.tr("保存配置失败：%v", "Save config failed: %v"), err)
+}
+
+func (m *appModel) saveProvider(provider provider) (int, error) {
+	if m.isEditingProvider() {
+		previous := m.config.Providers[m.editingIndex]
+		m.config.Providers[m.editingIndex] = provider
+		if err := saveConfig(m.configPath, m.config); err != nil {
+			m.config.Providers[m.editingIndex] = previous
+			return m.editingIndex, err
+		}
+		return m.editingIndex, nil
+	}
+
 	m.config.Providers = append(m.config.Providers, provider)
 	if err := saveConfig(m.configPath, m.config); err != nil {
 		m.config.Providers = m.config.Providers[:len(m.config.Providers)-1]
-		return err
+		return noEditingProviderIndex, err
 	}
-	return nil
+	return len(m.config.Providers) - 1, nil
 }

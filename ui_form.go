@@ -165,7 +165,20 @@ func (m *appModel) resetForm() {
 	m.apiKeyInput.Blur()
 	m.modelsInput.SetValue("")
 	m.modelsInput.Blur()
+	m.editingIndex = noEditingProviderIndex
 	m.focusIndex = 0
+	m.applyPlaceholders()
+	m.baseURLInput.Focus()
+}
+
+func (m *appModel) preloadForm(provider provider) {
+	m.baseURLInput.SetValue(provider.BaseURL)
+	m.baseURLInput.Blur()
+	m.apiKeyInput.SetValue(provider.APIKey)
+	m.apiKeyInput.Blur()
+	m.modelsInput.SetValue(strings.Join(provider.Models, "\n"))
+	m.modelsInput.Blur()
+	m.focusIndex = addProviderBaseURLField
 	m.applyPlaceholders()
 	m.baseURLInput.Focus()
 }

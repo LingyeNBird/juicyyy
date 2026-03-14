@@ -50,6 +50,7 @@ const (
 	addProviderAPIKeyField
 	addProviderModelsField
 	addProviderFieldCount
+	noEditingProviderIndex = -1
 )
 
 type viewMode int
@@ -64,6 +65,7 @@ type appModel struct {
 	configPath    string
 	lang          appLanguage
 	mode          viewMode
+	editingIndex  int
 	promptInput   textinput.Model
 	promptEditing bool
 	cursor        int
@@ -94,6 +96,7 @@ func newModel(cfg appConfig, configPath string) appModel {
 		configPath:   configPath,
 		lang:         langZH,
 		mode:         listMode,
+		editingIndex: noEditingProviderIndex,
 		promptInput:  promptInput,
 		baseURLInput: baseURLInput,
 		apiKeyInput:  apiKeyInput,
@@ -151,6 +154,10 @@ func (m appModel) activeFormPaneWidth() int {
 		return listPaneWidth(m.width)
 	}
 	return formPaneWidth(m.width)
+}
+
+func (m appModel) isEditingProvider() bool {
+	return m.editingIndex >= 0 && m.editingIndex < len(m.config.Providers)
 }
 
 func wrappedVisibleRowCount(value string, width int) int {
