@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -128,6 +130,17 @@ func TestModelsInputHasNoCharLimit(t *testing.T) {
 	}
 }
 
+func TestNewModelSeedsPromptInputWithDefault(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+
+	if got := m.promptInput.Value(); got != juicyPrompt {
+		t.Fatalf("expected default prompt %q, got %q", juicyPrompt, got)
+	}
+	if m.promptEditing {
+		t.Fatal("expected prompt editing to start inactive")
+	}
+}
+
 func TestModelEnterWithNoProvidersSetsStatusAndNoCommand(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 
@@ -166,6 +179,72 @@ func TestModelEnterStartsChecksAndClearsResults(t *testing.T) {
 	}
 	if got.statusKind != statusLoading {
 		t.Fatalf("expected loading status kind, got %v", got.statusKind)
+	}
+}
+
+func TestModelEnterUsesEditedPromptForChecks(t *testing.T) {
+	var capturedPrompt string
+	m := newModel(appConfig{Providers: []provider{{
+		BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+			var req chatCompletionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			capturedPrompt = req.Messages[0].Content
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"1"}}]}`)
+		}),
+		Models: []string{"gpt-4o-mini"},
+	}}}, "juicy-providers.json")
+	m.promptInput.SetValue("edited juicy prompt")
+
+	cmd := m.startChecks()
+	if cmd == nil {
+		t.Fatal("expected command to be returned")
+	}
+	if !m.running {
+		t.Fatal("expected running to be true")
+	}
+
+	msg := cmd()
+	if _, ok := msg.(runFinishedMsg); !ok {
+		t.Fatalf("expected runFinishedMsg, got %T", msg)
+	}
+	if capturedPrompt != "edited juicy prompt" {
+		t.Fatalf("expected edited prompt to be used, got %q", capturedPrompt)
+	}
+}
+
+func TestModelTabFocusesPromptAndTypingUpdatesIt(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	got := updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if !got.promptEditing {
+		t.Fatal("expected prompt editing to be active")
+	}
+
+	updated, cmd = got.Update(keyRunes('!'))
+	got = updated.(appModel)
+	if cmd == nil {
+		t.Fatal("expected textinput command while editing prompt")
+	}
+	if !strings.HasSuffix(got.promptInput.Value(), "!") {
+		t.Fatalf("expected prompt to be updated, got %q", got.promptInput.Value())
+	}
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got = updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command when finishing prompt edit")
+	}
+	if got.promptEditing {
+		t.Fatal("expected prompt editing to finish on enter")
+	}
+	if got.running {
+		t.Fatal("expected finishing prompt edit not to start checks")
 	}
 }
 
@@ -509,6 +588,12 @@ func TestListViewUsesSharedHeadersAndEmptyStates(t *testing.T) {
 			if !strings.Contains(view, pageTitleStyle.Render("Juicy 批量检测器")) {
 				t.Fatalf("expected page title in view: %q", view)
 			}
+			if !strings.Contains(view, fieldLabelStyle.Render("提示词：")) {
+				t.Fatalf("expected prompt label in view: %q", view)
+			}
+			if !strings.Contains(view, juicyPrompt) {
+				t.Fatalf("expected default prompt in view: %q", view)
+			}
 			if !strings.Contains(view, renderPaneTitle("供应商")) {
 				t.Fatalf("expected provider pane title in view: %q", view)
 			}
@@ -521,7 +606,7 @@ func TestListViewUsesSharedHeadersAndEmptyStates(t *testing.T) {
 			if !strings.Contains(view, "暂无结果，请先选择供应商并按") || !strings.Contains(view, "Enter。") {
 				t.Fatalf("expected result empty state in view: %q", view)
 			}
-			if !strings.Contains(view, renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出")) {
+			if !strings.Contains(view, renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出")) {
 				t.Fatalf("expected shortcut footer in view: %q", view)
 			}
 		})
@@ -584,7 +669,7 @@ func TestListViewKeepsResultsPaneAboveBottomBarAcrossViewportHeights(t *testing.
 			if got := lipgloss.Height(view); got != m.height {
 				t.Fatalf("expected view height %d, got %d", m.height, got)
 			}
-			if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+			if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
 				t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
 			}
 			if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
@@ -623,7 +708,7 @@ func TestListViewKeepsFooterPinnedWhenProviderTextWraps(t *testing.T) {
 	if got := lipgloss.Height(view); got != m.height {
 		t.Fatalf("expected view height %d, got %d", m.height, got)
 	}
-	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
 		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
 	}
 	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
@@ -658,7 +743,7 @@ func TestListViewClampsGracefullyForZeroAndSmallHeights(t *testing.T) {
 				view := m.listView()
 				lines := strings.Split(view, "\n")
 
-				if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+				if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
 					t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
 				}
 				if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
@@ -667,10 +752,7 @@ func TestListViewClampsGracefullyForZeroAndSmallHeights(t *testing.T) {
 
 				headerHeight, _, bottomHeight := listLayoutHeightsForTest(m)
 				availableHeight := m.availableListBodyHeight(
-					m.renderPageHeader(
-						m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
-						m.tr("提示词：", "Prompt: ")+juicyPrompt,
-					),
+					m.renderPageHeaderWithPrompt(),
 					m.listBottomContent(),
 				)
 				if availableHeight != 0 {
@@ -706,7 +788,7 @@ func TestListViewKeepsFooterPinnedWhenProviderContentIsTall(t *testing.T) {
 	if got := lipgloss.Height(view); got != m.height {
 		t.Fatalf("expected view height %d, got %d", m.height, got)
 	}
-	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
 		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
 	}
 	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
@@ -911,10 +993,7 @@ func keyRunes(r rune) tea.KeyMsg {
 }
 
 func listLayoutHeightsForTest(m appModel) (headerHeight, bodyHeight, bottomHeight int) {
-	header := m.renderPageHeader(
-		m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
-		m.tr("提示词：", "Prompt: ")+juicyPrompt,
-	)
+	header := m.renderPageHeaderWithPrompt()
 	body := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		renderTitledPane(m.tr("供应商", "Providers"), listPaneWidth(m.width), m.providerListView()),

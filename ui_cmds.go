@@ -10,9 +10,9 @@ type runFinishedMsg struct {
 	Results []modelResult
 }
 
-func runChecksCmd(selected provider, concurrency int) tea.Cmd {
+func runChecksCmd(selected provider, prompt string, concurrency int) tea.Cmd {
 	return func() tea.Msg {
-		results := runJuicyChecks(context.Background(), selected, concurrency)
+		results := runJuicyChecks(context.Background(), selected, prompt, concurrency)
 		return runFinishedMsg{Results: results}
 	}
 }

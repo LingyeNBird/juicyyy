@@ -68,7 +68,7 @@ type attemptOutcome struct {
 	hasNumeric bool
 }
 
-func runJuicyChecks(ctx context.Context, selected provider, concurrency int) []modelResult {
+func runJuicyChecks(ctx context.Context, selected provider, prompt string, concurrency int) []modelResult {
 	if concurrency < 1 {
 		concurrency = 1
 	}
@@ -100,7 +100,7 @@ func runJuicyChecks(ctx context.Context, selected provider, concurrency int) []m
 			defer wg.Done()
 			for index := range jobs {
 				modelName := selected.Models[index]
-				results[index] = checkModel(ctx, httpClient, selected, modelName)
+				results[index] = checkModel(ctx, httpClient, selected, modelName, prompt)
 			}
 		}()
 	}
@@ -114,9 +114,9 @@ func runJuicyChecks(ctx context.Context, selected provider, concurrency int) []m
 	return results
 }
 
-func checkModel(ctx context.Context, httpClient *http.Client, selected provider, modelName string) modelResult {
+func checkModel(ctx context.Context, httpClient *http.Client, selected provider, modelName, prompt string) modelResult {
 	result := modelResult{Model: modelName}
-	initial := runSingleAttempt(ctx, httpClient, selected, modelName)
+	initial := runSingleAttempt(ctx, httpClient, selected, modelName, prompt)
 	if !initial.retryable {
 		if initial.hasNumeric {
 			result.Value = initial.formatted
@@ -136,7 +136,7 @@ func checkModel(ctx context.Context, httpClient *http.Client, selected provider,
 	}
 
 	for attempt := 0; attempt < retryOnZeroOrInvalidCount; attempt++ {
-		outcome := runSingleAttempt(ctx, httpClient, selected, modelName)
+		outcome := runSingleAttempt(ctx, httpClient, selected, modelName, prompt)
 		if outcome.hasNumeric && outcome.value > bestValue {
 			bestValue = outcome.value
 			bestFormatted = outcome.formatted
@@ -158,13 +158,13 @@ func checkModel(ctx context.Context, httpClient *http.Client, selected provider,
 	return result
 }
 
-func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected provider, modelName string) attemptOutcome {
+func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected provider, modelName, prompt string) attemptOutcome {
 
 	body, err := json.Marshal(chatCompletionRequest{
 		Model: modelName,
 		Messages: []chatMessage{{
 			Role:    "user",
-			Content: juicyPrompt,
+			Content: prompt,
 		}},
 		Temperature: 0,
 		MaxTokens:   32,

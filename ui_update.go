@@ -31,9 +31,16 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finishRun(msg.Results)
 		return m, nil
 	case tea.KeyMsg:
-		if key := msg.String(); key == "ctrl+c" {
+		key := msg.String()
+		if key == "ctrl+c" {
 			return m, tea.Quit
-		} else if key == "l" {
+		}
+
+		if m.mode != addMode && m.promptEditing {
+			return m.handlePromptKeys(msg)
+		}
+
+		if key == "l" {
 			m.toggleLanguage()
 			return m, nil
 		}
@@ -55,6 +62,9 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "tab":
+		m.focusPromptInput()
+		return m, nil
 	case "up", "k", "down", "j", "a", "enter":
 		if m.running {
 			m.setStatus(statusWarning, m.tr("检测进行中，请等待完成后再切换或操作。", "Checks are still running. Wait for completion before changing providers."))
@@ -113,6 +123,18 @@ func (m appModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.updateInputs(msg)
 }
 
+func (m appModel) handlePromptKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "tab", "esc", "enter":
+		m.blurPromptInput()
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.promptInput, cmd = m.promptInput.Update(msg)
+	return m, cmd
+}
+
 func (m *appModel) finishRun(results []modelResult) {
 	m.running = false
 	m.results = results
@@ -132,6 +154,7 @@ func (m *appModel) finishRun(results []modelResult) {
 }
 
 func (m *appModel) enterAddMode() {
+	m.blurPromptInput()
 	m.mode = addMode
 	m.resetForm()
 	m.setStatus(statusInfo, m.tr("新增供应商：回车保存，Esc 取消。", "Add a provider. Press Enter to save or Esc to cancel."))
@@ -151,7 +174,17 @@ func (m *appModel) startChecks() tea.Cmd {
 	} else {
 		m.setStatus(statusLoading, fmt.Sprintf("正在检测 %s 的 %d 个模型（并发 %d）...", selected.BaseURL, len(selected.Models), m.concurrency))
 	}
-	return runChecksCmd(selected, m.concurrency)
+	return runChecksCmd(selected, m.promptInput.Value(), m.concurrency)
+}
+
+func (m *appModel) focusPromptInput() {
+	m.promptEditing = true
+	m.promptInput.Focus()
+}
+
+func (m *appModel) blurPromptInput() {
+	m.promptEditing = false
+	m.promptInput.Blur()
 }
 
 func (m *appModel) buildProviderFromInputs() (provider, error) {

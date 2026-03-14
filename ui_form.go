@@ -15,6 +15,16 @@ func newInputs(lang appLanguage) []textinput.Model {
 	return inputs
 }
 
+func newPromptInput() textinput.Model {
+	input := textinput.New()
+	input.Prompt = ""
+	input.CharLimit = 0
+	input.TextStyle = inputStyle
+	input.SetValue(juicyPrompt)
+	input.Blur()
+	return input
+}
+
 func newInput(kind inputKind) textinput.Model {
 	input := textinput.New()
 	input.Prompt = "> "

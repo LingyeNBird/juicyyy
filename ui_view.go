@@ -44,10 +44,7 @@ func (m appModel) listView() string {
 }
 
 func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.Color, rightBody, bottomContent string) string {
-	header := m.renderPageHeader(
-		m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
-		m.tr("提示词：", "Prompt: ")+juicyPrompt,
-	)
+	header := m.renderPageHeaderWithPrompt()
 	paneWidth := listPaneWidth(m.width)
 	bodyHeight := m.availableListBodyHeight(header, bottomContent)
 	providerPane := renderTitledPaneWithHeight(
@@ -74,9 +71,16 @@ func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.C
 }
 
 func (m appModel) listBottomContent() string {
+	if m.promptEditing {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.statusLine(),
+			renderShortcutFooter(m.tr("快捷键：Tab/Esc 完成提示词编辑 | Enter 应用提示词", "Keys: tab/esc finish prompt edit | enter apply prompt")),
+		)
+	}
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.statusLine(),
-		renderShortcutFooter(m.tr("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出", "Keys: a add provider | enter run checks | j/k move | l toggle lang | q quit")),
+		renderShortcutFooter(m.tr("快捷键：Tab 编辑提示词 | a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出", "Keys: tab edit prompt | a add provider | enter run checks | j/k move | l toggle lang | q quit")),
 	)
 }
 
@@ -206,6 +210,15 @@ func (m appModel) renderPageHeader(title, subtitle string) string {
 		lines = append(lines, helperTextStyle.Render(subtitle))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m appModel) renderPageHeaderWithPrompt() string {
+	title := m.renderPageHeader(m.tr("Juicy 批量检测器", "Juicy Batch Checker"), "")
+	label := fieldLabelStyle.Render(m.tr("提示词：", "Prompt:"))
+	promptInput := m.promptInput
+	promptInput.Width = promptInputWidth(m.width, m.tr("提示词：", "Prompt:"))
+	promptLine := lipgloss.JoinHorizontal(lipgloss.Center, label, " ", promptInput.View())
+	return lipgloss.JoinVertical(lipgloss.Left, title, promptLine)
 }
 
 func (m appModel) renderFormField(field formFieldSpec, inputView string) string {

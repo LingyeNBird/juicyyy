@@ -124,7 +124,7 @@ func TestCheckModelRetriesZeroAndKeepsHighest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model")
+	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", juicyPrompt)
 
 	if result.Error != "" {
 		t.Fatalf("unexpected error: %s", result.Error)
@@ -146,7 +146,7 @@ func TestCheckModelRetriesNonnumericAndKeepsHighest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model")
+	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", juicyPrompt)
 
 	if result.Error != "" {
 		t.Fatalf("unexpected error: %s", result.Error)
@@ -168,7 +168,7 @@ func TestCheckModelReturnsErrorWhenAllRetryableAttemptsFail(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model")
+	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", juicyPrompt)
 
 	if result.Value != "0" {
 		t.Fatalf("unexpected value: got %q want %q", result.Value, "0")
@@ -190,7 +190,7 @@ func TestCheckModelDoesNotRetryAPIErrors(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model")
+	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", juicyPrompt)
 
 	if result.Value != "" {
 		t.Fatalf("unexpected value: %q", result.Value)
@@ -204,7 +204,7 @@ func TestCheckModelDoesNotRetryAPIErrors(t *testing.T) {
 }
 
 func TestRunJuicyChecksEmptyModels(t *testing.T) {
-	results := runJuicyChecks(context.Background(), provider{BaseURL: "https://example.com", Models: nil}, 5)
+	results := runJuicyChecks(context.Background(), provider{BaseURL: "https://example.com", Models: nil}, juicyPrompt, 5)
 	if len(results) != 0 {
 		t.Fatalf("expected empty results, got %d", len(results))
 	}
@@ -233,7 +233,7 @@ func TestRunJuicyChecksPreservesModelOrder(t *testing.T) {
 		Models: []string{"slow", "fast", "medium"},
 	}
 
-	results := runJuicyChecks(context.Background(), selected, 3)
+	results := runJuicyChecks(context.Background(), selected, juicyPrompt, 3)
 	if len(results) != 3 {
 		t.Fatalf("unexpected results length: got %d want 3", len(results))
 	}
@@ -250,10 +250,17 @@ func TestRunSingleAttemptSetsAuthorizationHeaderWhenAPIKeyPresent(t *testing.T) 
 		if got := r.Header.Get("Authorization"); got != "Bearer secret" {
 			t.Fatalf("unexpected authorization header: %q", got)
 		}
+		var req chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if got := req.Messages[0].Content; got != "custom prompt" {
+			t.Fatalf("unexpected prompt content: %q", got)
+		}
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"9"}}]}`)
 	}), APIKey: "secret"}
 
-	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model")
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", "custom prompt")
 	if !outcome.hasNumeric || outcome.formatted != "9" {
 		t.Fatalf("unexpected outcome: %+v", outcome)
 	}
@@ -267,7 +274,7 @@ func TestRunSingleAttemptOmitsAuthorizationHeaderWhenAPIKeyEmpty(t *testing.T) {
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"11"}}]}`)
 	})}
 
-	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model")
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", juicyPrompt)
 	if !outcome.hasNumeric || outcome.formatted != "11" {
 		t.Fatalf("unexpected outcome: %+v", outcome)
 	}

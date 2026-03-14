@@ -46,22 +46,24 @@ const (
 )
 
 type appModel struct {
-	config       appConfig
-	configPath   string
-	lang         appLanguage
-	mode         viewMode
-	cursor       int
-	activeResult int
-	inputs       []textinput.Model
-	focusIndex   int
-	width        int
-	height       int
-	status       string
-	statusKind   statusKind
-	results      []modelResult
-	running      bool
-	spinner      spinner.Model
-	concurrency  int
+	config        appConfig
+	configPath    string
+	lang          appLanguage
+	mode          viewMode
+	promptInput   textinput.Model
+	promptEditing bool
+	cursor        int
+	activeResult  int
+	inputs        []textinput.Model
+	focusIndex    int
+	width         int
+	height        int
+	status        string
+	statusKind    statusKind
+	results       []modelResult
+	running       bool
+	spinner       spinner.Model
+	concurrency   int
 }
 
 func newModel(cfg appConfig, configPath string) appModel {
@@ -70,11 +72,13 @@ func newModel(cfg appConfig, configPath string) appModel {
 	spin.Style = loadingStyle
 
 	inputs := newInputs(langZH)
+	promptInput := newPromptInput()
 	m := appModel{
 		config:      cfg,
 		configPath:  configPath,
 		lang:        langZH,
 		mode:        listMode,
+		promptInput: promptInput,
 		inputs:      inputs,
 		spinner:     spin,
 		concurrency: 5,
@@ -106,4 +110,8 @@ func (m appModel) availableListBodyHeight(header, bottomContent string) int {
 
 func inputWidthForFormPane(paneWidth int) int {
 	return maxInt(minInputWidth, paneWidth-formInputWidthSlack)
+}
+
+func promptInputWidth(totalWidth int, label string) int {
+	return maxInt(minInputWidth, totalWidth-layoutOuterPadding-lipgloss.Width(label)-1)
 }
