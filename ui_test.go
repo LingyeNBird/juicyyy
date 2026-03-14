@@ -20,6 +20,25 @@ func assertNoPanic(t *testing.T, fn func()) {
 	fn()
 }
 
+func assertContainsAll(t *testing.T, text string, parts ...string) {
+	t.Helper()
+	for _, part := range parts {
+		if !strings.Contains(text, part) {
+			t.Fatalf("expected %q in view: %q", part, text)
+		}
+	}
+}
+
+func compactForContains(text string) string {
+	replacer := strings.NewReplacer(
+		" ", "",
+		"\n", "",
+		"\t", "",
+		"│", "",
+	)
+	return replacer.Replace(text)
+}
+
 func TestFormViewWithChinesePlaceholdersDoesNotPanic(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 	m.mode = addMode
@@ -87,7 +106,7 @@ func TestWindowSizeMsgUpdatesInputWidths(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected no command")
 	}
-	wantWidth := inputWidthForFormPane(formPaneWidth(90))
+	wantWidth := inputWidthForFormPane(listPaneWidth(90))
 	for i := range got.inputs {
 		if got.inputs[i].Width != wantWidth {
 			t.Fatalf("expected input width %d, got %d at index %d", wantWidth, got.inputs[i].Width, i)
@@ -278,6 +297,7 @@ func TestModelToggleLanguageUpdatesStatusAndPlaceholders(t *testing.T) {
 func TestModelAddModeEscCancelsAndReturnsToList(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 	m.mode = addMode
+	m.width = 100
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	got := updated.(appModel)
@@ -293,6 +313,14 @@ func TestModelAddModeEscCancelsAndReturnsToList(t *testing.T) {
 	}
 	if got.statusKind != statusInfo {
 		t.Fatalf("expected info status kind, got %v", got.statusKind)
+	}
+
+	view := got.View()
+	if !strings.Contains(view, renderPaneTitle("结果")) {
+		t.Fatalf("expected results pane after cancel: %q", view)
+	}
+	if strings.Contains(view, renderPaneTitle("新增供应商")) {
+		t.Fatalf("expected add-provider pane removed after cancel: %q", view)
 	}
 }
 
@@ -364,6 +392,7 @@ func TestModelSavesProviderAndMovesCursor(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "providers.json")
 	m := newModel(appConfig{}, configPath)
 	m.mode = addMode
+	m.width = 100
 	m.inputs[0].SetValue("https://example.com/v1/")
 	m.inputs[1].SetValue("secret")
 	m.inputs[2].SetValue("gpt-4o-mini, qwen-max")
@@ -391,6 +420,16 @@ func TestModelSavesProviderAndMovesCursor(t *testing.T) {
 	}
 	if got.statusKind != statusSuccess {
 		t.Fatalf("expected success status kind, got %v", got.statusKind)
+	}
+	view := got.View()
+	if !strings.Contains(view, renderPaneTitle("结果")) {
+		t.Fatalf("expected results pane restored after save: %q", view)
+	}
+	if strings.Contains(view, renderPaneTitle("新增供应商")) {
+		t.Fatalf("expected add-provider pane removed after save: %q", view)
+	}
+	if !strings.Contains(view, selectionStyle.Render("https://example.com/v1（2 个模型）")) {
+		t.Fatalf("expected saved provider to remain visible in provider pane: %q", view)
 	}
 	loaded, err := loadConfig(configPath)
 	if err != nil {
@@ -731,22 +770,44 @@ func TestFormViewShowsFieldGuidanceInBothLanguages(t *testing.T) {
 			m.width = tc.width
 			m.applyPlaceholders()
 
-			view := m.formView()
+			view := m.View()
+			providerTitle := renderPaneTitle(m.tr("供应商", "Providers"))
+			resultTitle := renderPaneTitle(m.tr("结果", "Results"))
 
+			if !strings.Contains(view, pageTitleStyle.Render(m.tr("Juicy 批量检测器", "Juicy Batch Checker"))) {
+				t.Fatalf("expected shared page header in add-mode view: %q", view)
+			}
+			if !strings.Contains(view, providerTitle) {
+				t.Fatalf("expected provider pane to remain visible in add-mode view: %q", view)
+			}
 			if !strings.Contains(view, renderPaneTitle(tc.title)) {
 				t.Fatalf("expected pane title in form view: %q", view)
 			}
-			if !strings.Contains(view, helperTextStyle.Render(tc.intro)) {
-				t.Fatalf("expected intro copy in form view: %q", view)
+			if strings.Contains(view, resultTitle) {
+				t.Fatalf("expected results pane title to be replaced in add-mode view: %q", view)
+			}
+			if !strings.Contains(view, m.tr("还没有保存任何供应商", "No providers saved yet.")) {
+				t.Fatalf("expected provider pane content preserved in add-mode view: %q", view)
 			}
 			if !strings.Contains(view, renderShortcutFooter(tc.keys)) {
 				t.Fatalf("expected footer in form view: %q", view)
+			}
+			if tc.lang == langZH {
+				assertContainsAll(t, view,
+					"请填写 OAI 兼容 base URL、API key",
+					"模型列表（逗号分隔）。",
+				)
+			} else {
+				assertContainsAll(t, view,
+					"Fill in an OAI-compatible base URL",
+					"comma-separated",
+				)
 			}
 			for i, field := range formFields {
 				if !strings.Contains(view, renderFieldLabel(field.label.forLang(tc.lang))) {
 					t.Fatalf("expected field label %q in view: %q", field.label.forLang(tc.lang), view)
 				}
-				if !strings.Contains(view, helperTextStyle.Render(field.helper.forLang(tc.lang))) {
+				if !strings.Contains(compactForContains(view), compactForContains(field.helper.forLang(tc.lang))) {
 					t.Fatalf("expected field helper %q in view: %q", field.helper.forLang(tc.lang), view)
 				}
 				if tc.lang == langZH && m.inputs[i].Placeholder != "" {
@@ -760,6 +821,53 @@ func TestFormViewShowsFieldGuidanceInBothLanguages(t *testing.T) {
 	}
 }
 
+func TestViewSwitchesOnlyRightPaneInAddMode(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", Models: []string{"gpt-4o-mini"}}}}, "juicy-providers.json")
+	m.width = 100
+	m.height = 20
+
+	listView := m.View()
+	if !strings.Contains(listView, renderPaneTitle("供应商")) {
+		t.Fatalf("expected provider pane in list view: %q", listView)
+	}
+	if !strings.Contains(listView, renderPaneTitle("结果")) {
+		t.Fatalf("expected results pane in list view: %q", listView)
+	}
+	if !strings.Contains(listView, selectionStyle.Render("https://one（1 个模型）")) {
+		t.Fatalf("expected provider content in list view: %q", listView)
+	}
+
+	updated, cmd := m.Update(keyRunes('a'))
+	got := updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.mode != addMode {
+		t.Fatalf("expected add mode, got %v", got.mode)
+	}
+
+	addView := got.View()
+	if !strings.Contains(addView, renderPaneTitle("供应商")) {
+		t.Fatalf("expected provider pane to remain visible in add mode: %q", addView)
+	}
+	if !strings.Contains(addView, selectionStyle.Render("https://one（1 个模型）")) {
+		t.Fatalf("expected provider content to remain visible in add mode: %q", addView)
+	}
+	if !strings.Contains(addView, renderPaneTitle("新增供应商")) {
+		t.Fatalf("expected add-provider pane in add mode: %q", addView)
+	}
+	if strings.Contains(addView, renderPaneTitle("结果")) {
+		t.Fatalf("expected results pane title replaced in add mode: %q", addView)
+	}
+	assertContainsAll(t, addView,
+		"请填写 OAI 兼容 base URL、API key",
+		"模型列表（逗号分隔）。",
+	)
+	if !strings.Contains(addView, renderShortcutFooter("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英")) {
+		t.Fatalf("expected form shortcuts in add mode footer: %q", addView)
+	}
+}
+
 func TestFormViewPinsStatusAndFooterToBottomWhenHeightAvailable(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 	m.mode = addMode
@@ -767,8 +875,10 @@ func TestFormViewPinsStatusAndFooterToBottomWhenHeightAvailable(t *testing.T) {
 	m.height = 20
 	m.applyPlaceholders()
 
-	view := m.formView()
+	view := m.View()
 	lines := strings.Split(view, "\n")
+	bottomHeight := lipgloss.Height(m.formBottomContent())
+	border := lipgloss.RoundedBorder()
 	footer := renderShortcutFooter("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英")
 
 	if got := lipgloss.Height(view); got != m.height {
@@ -780,12 +890,20 @@ func TestFormViewPinsStatusAndFooterToBottomWhenHeightAvailable(t *testing.T) {
 	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
 		t.Fatalf("expected status on second-to-last line, got %q", lines[len(lines)-2])
 	}
+	bodyBottomLine := strings.TrimRight(lines[len(lines)-bottomHeight-1], " ")
+	if !strings.Contains(bodyBottomLine, border.BottomLeft) || !strings.Contains(bodyBottomLine, border.BottomRight) {
+		t.Fatalf("expected split panes directly above bottom bar, got %q", bodyBottomLine)
+	}
+	if !strings.Contains(view, renderPaneTitle("供应商")) {
+		t.Fatalf("expected provider pane preserved in add mode: %q", view)
+	}
 	if !strings.Contains(view, renderPaneTitle("新增供应商")) {
 		t.Fatalf("expected form pane content preserved: %q", view)
 	}
-	if !strings.Contains(view, helperTextStyle.Render("请填写 OAI 兼容 base URL、API key 和模型列表（逗号分隔）。")) {
-		t.Fatalf("expected form intro preserved: %q", view)
-	}
+	assertContainsAll(t, view,
+		"请填写 OAI 兼容 base URL、API key",
+		"模型列表（逗号分隔）。",
+	)
 }
 
 func keyRunes(r rune) tea.KeyMsg {

@@ -10,5 +10,5 @@ juicy-providers.json
 # Local research artifacts
 _research/
 
-# Agent files
+# Agent-generated files
 .sisyphus/*

@@ -53,7 +53,11 @@ func (m appModel) tr(zh, en string) string {
 }
 
 func (m *appModel) applyPlaceholders() {
-	applyInputLocale(m.inputs, m.lang, formPaneWidth(m.width))
+	paneWidth := formPaneWidth(m.width)
+	if m.mode == addMode {
+		paneWidth = listPaneWidth(m.width)
+	}
+	applyInputLocale(m.inputs, m.lang, paneWidth)
 }
 
 func applyInputLocale(inputs []textinput.Model, lang appLanguage, paneWidth int) {

@@ -8,6 +8,10 @@ import (
 )
 
 var (
+	defaultPaneBorderColor     = lipgloss.Color("177")
+	resultsPaneBorderColor     = lipgloss.Color("214")
+	addProviderPaneBorderColor = lipgloss.Color("78")
+
 	pageTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("153")).Padding(0, 1)
 	fieldLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
 	helperTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
@@ -18,8 +22,8 @@ var (
 	errorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	infoStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
 	warningStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("213"))
-	paneBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("177"))
-	paneStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("177")).Padding(1)
+	paneBorderStyle = lipgloss.NewStyle().Foreground(defaultPaneBorderColor)
+	paneStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(defaultPaneBorderColor).Padding(1)
 	inputStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 )
 
@@ -31,11 +35,19 @@ func (m appModel) View() string {
 }
 
 func (m appModel) listView() string {
+	return m.renderSplitView(
+		m.tr("结果", "Results"),
+		resultsPaneBorderColor,
+		m.resultListView(),
+		m.listBottomContent(),
+	)
+}
+
+func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.Color, rightBody, bottomContent string) string {
 	header := m.renderPageHeader(
 		m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
 		m.tr("提示词：", "Prompt: ")+juicyPrompt,
 	)
-	bottomContent := m.listBottomContent()
 	paneWidth := listPaneWidth(m.width)
 	bodyHeight := m.availableListBodyHeight(header, bottomContent)
 	providerPane := renderTitledPaneWithHeight(
@@ -44,13 +56,14 @@ func (m appModel) listView() string {
 		bodyHeight,
 		m.providerListView(),
 	)
-	resultPane := renderTitledPaneWithHeight(
-		m.tr("结果", "Results"),
+	rightPane := renderTitledPaneWithHeight(
+		rightTitle,
 		paneWidth,
 		bodyHeight,
-		m.resultListView(),
+		rightBody,
+		rightBorderColor,
 	)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, providerPane, resultPane)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, providerPane, rightPane)
 	mainContent := lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		"",
@@ -68,7 +81,16 @@ func (m appModel) listBottomContent() string {
 }
 
 func (m appModel) formView() string {
-	paneWidth := formPaneWidth(m.width)
+	return m.renderSplitView(
+		m.tr("新增供应商", "Add Provider"),
+		addProviderPaneBorderColor,
+		m.formPaneBody(),
+		m.formBottomContent(),
+	)
+}
+
+func (m appModel) formPaneBody() string {
+	paneWidth := listPaneWidth(m.width)
 	applyInputLocale(m.inputs, m.lang, paneWidth)
 
 	sections := []string{
@@ -78,13 +100,16 @@ func (m appModel) formView() string {
 		sections = append(sections, m.renderFormField(field, m.inputs[i].View()))
 	}
 
-	formPane := renderTitledPane(m.tr("新增供应商", "Add Provider"), paneWidth, strings.Join(sections, "\n\n"))
+	return strings.Join(sections, "\n\n")
+}
+
+func (m appModel) formBottomContent() string {
 	bottomContent := lipgloss.JoinVertical(lipgloss.Left,
 		m.statusLine(),
 		renderShortcutFooter(m.tr("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英", "Keys: tab/shift+tab move | enter save | esc cancel | l toggle lang")),
 	)
 
-	return m.renderViewWithBottomBar(formPane, bottomContent)
+	return bottomContent
 }
 
 func (m appModel) renderViewWithBottomBar(mainContent, bottomContent string) string {
@@ -191,23 +216,25 @@ func (m appModel) renderFormField(field formFieldSpec, inputView string) string 
 	}, "\n")
 }
 
-func renderPaneTitle(title string) string {
-	return paneBorderStyle.Copy().Bold(true).Render("|" + title + "|")
+func renderPaneTitle(title string, borderColor ...lipgloss.Color) string {
+	resolvedBorderColor := resolvePaneBorderColor(borderColor...)
+	return paneBorderStyle.Copy().Foreground(resolvedBorderColor).Bold(true).Render("|" + title + "|")
 }
 
-func renderTitledPane(title string, width int, body string) string {
-	rendered := paneStyle.Width(width).Render(body)
-	return renderTitledPaneFromRendered(title, rendered)
+func renderTitledPane(title string, width int, body string, borderColor ...lipgloss.Color) string {
+	resolvedBorderColor := resolvePaneBorderColor(borderColor...)
+	rendered := paneStyle.Copy().BorderForeground(resolvedBorderColor).Width(width).Render(body)
+	return renderTitledPaneFromRendered(title, rendered, resolvedBorderColor)
 }
 
-func renderTitledPaneFromRendered(title, rendered string) string {
+func renderTitledPaneFromRendered(title, rendered string, borderColor lipgloss.Color) string {
 	lines := strings.Split(rendered, "\n")
 	if len(lines) == 0 {
 		return rendered
 	}
 
 	border := lipgloss.RoundedBorder()
-	titleText := renderPaneTitle(title)
+	titleText := renderPaneTitle(title, borderColor)
 	visibleTitleWidth := lipgloss.Width("|" + title + "|")
 	interiorWidth := maxInt(0, lipgloss.Width(lines[0])-2)
 	leftRun := 1
@@ -218,17 +245,19 @@ func renderTitledPaneFromRendered(title, rendered string) string {
 	}
 
 	lines[0] = strings.Join([]string{
-		paneBorderStyle.Render(border.TopLeft + strings.Repeat(border.Top, leftRun)),
+		paneBorderStyle.Copy().Foreground(borderColor).Render(border.TopLeft + strings.Repeat(border.Top, leftRun)),
 		titleText,
-		paneBorderStyle.Render(strings.Repeat(border.Top, rightRun) + border.TopRight),
+		paneBorderStyle.Copy().Foreground(borderColor).Render(strings.Repeat(border.Top, rightRun) + border.TopRight),
 	}, "")
 
 	return strings.Join(lines, "\n")
 }
 
-func renderTitledPaneWithHeight(title string, width, height int, body string) string {
+func renderTitledPaneWithHeight(title string, width, height int, body string, borderColor ...lipgloss.Color) string {
+	resolvedBorderColor := resolvePaneBorderColor(borderColor...)
+
 	if height <= 0 {
-		return renderTitledPane(title, width, body)
+		return renderTitledPane(title, width, body, resolvedBorderColor)
 	}
 
 	contentHeight := maxInt(0, height-paneVerticalChrome)
@@ -245,8 +274,15 @@ func renderTitledPaneWithHeight(title string, width, height int, body string) st
 		lines = append(lines, make([]string, contentHeight-len(lines))...)
 	}
 
-	rendered := paneStyle.Width(width).Render(strings.Join(lines, "\n"))
-	return renderTitledPaneFromRendered(title, rendered)
+	rendered := paneStyle.Copy().BorderForeground(resolvedBorderColor).Width(width).Render(strings.Join(lines, "\n"))
+	return renderTitledPaneFromRendered(title, rendered, resolvedBorderColor)
+}
+
+func resolvePaneBorderColor(borderColor ...lipgloss.Color) lipgloss.Color {
+	if len(borderColor) > 0 {
+		return borderColor[0]
+	}
+	return defaultPaneBorderColor
 }
 
 func wrapPaneBody(width int, body string) string {
