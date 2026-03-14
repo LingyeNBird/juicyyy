@@ -378,12 +378,17 @@ func (m model) formView() string {
 		"",
 		m.tr("模型列表", "Models"),
 		m.inputs[2].View(),
-		"",
-		m.statusLine(),
-		helpStyle.Render(m.tr("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英", "Keys: tab/shift+tab move | enter save | esc cancel | l toggle lang")),
 	}
 
-	return paneStyle.Width(maxInt(72, m.width-6)).Render(strings.Join(lines, "\n"))
+	formPane := paneStyle.Width(maxInt(72, m.width-6)).Render(strings.Join(lines, "\n"))
+	footer := helpStyle.Render(m.tr("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英", "Keys: tab/shift+tab move | enter save | esc cancel | l toggle lang"))
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		formPane,
+		"",
+		m.statusLine(),
+		footer,
+	)
 }
 
 func (m model) providerListView() string {
