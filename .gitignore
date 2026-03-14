@@ -5,6 +5,10 @@
 
 # Local runtime data
 juicy-providers.json
+*.log
 
 # Local research artifacts
 _research/
+
+# Agent files
+.sisyphus/*

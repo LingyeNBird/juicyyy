@@ -11,6 +11,10 @@ import (
 
 func main() {
 	configPath := filepath.Join(".", "juicy-providers.json")
+	activeDebugOutput = newDebugOutput(runtimeDebugFilePath)
+	if err := resetDebugOutputFile(runtimeDebugFilePath); err != nil {
+		fmt.Fprintf(os.Stderr, "reset debug file: %v\n", err)
+	}
 
 	cfg, err := loadConfig(configPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

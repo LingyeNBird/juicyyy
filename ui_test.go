@@ -489,65 +489,194 @@ func TestListViewUsesSharedHeadersAndEmptyStates(t *testing.T) {
 	}
 }
 
-func TestListViewPinsStatusAndFooterToBottomWhenHeightAvailable(t *testing.T) {
-	m := newModel(appConfig{}, "juicy-providers.json")
-	m.width = 100
-	m.height = 20
+func TestRenderTitledPaneWithHeightClampsWrappedSingleLineContent(t *testing.T) {
+	width := 24
+	height := 8
+	body := strings.Repeat("https://provider.example.com/v1/models/super-long-name", 2)
 
-	view := m.listView()
-	lines := strings.Split(view, "\n")
-	footer := renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出")
+	if strings.Contains(body, "\n") {
+		t.Fatalf("expected single-line body, got %q", body)
+	}
 
-	if got := lipgloss.Height(view); got != m.height {
-		t.Fatalf("expected view height %d, got %d", m.height, got)
+	full := renderTitledPane("Providers", width, body)
+	limited := renderTitledPaneWithHeight("Providers", width, height, body)
+	lines := strings.Split(limited, "\n")
+	border := lipgloss.RoundedBorder()
+
+	if lipgloss.Height(full) <= height {
+		t.Fatalf("test setup invalid: wrapped pane height %d must exceed limit %d", lipgloss.Height(full), height)
 	}
-	if strings.TrimRight(lines[len(lines)-1], " ") != footer {
-		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
+	if got := lipgloss.Height(limited); got != height {
+		t.Fatalf("expected limited pane height %d, got %d", height, got)
 	}
-	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
-		t.Fatalf("expected status on second-to-last line, got %q", lines[len(lines)-2])
+	if !strings.Contains(lines[0], renderPaneTitle("Providers")) {
+		t.Fatalf("expected titled border preserved, got %q", lines[0])
 	}
-	if !strings.Contains(view, pageTitleStyle.Render("Juicy 批量检测器")) {
-		t.Fatalf("expected list header content preserved: %q", view)
+	if !strings.Contains(limited, "https://provider") {
+		t.Fatalf("expected wrapped content preserved, got %q", limited)
 	}
-	if !strings.Contains(view, renderPaneTitle("供应商")) || !strings.Contains(view, renderPaneTitle("结果")) {
-		t.Fatalf("expected list panes preserved: %q", view)
+	if !strings.Contains(lines[len(lines)-1], border.BottomLeft) || !strings.Contains(lines[len(lines)-1], border.BottomRight) {
+		t.Fatalf("expected bottom border on final line, got %q", lines[len(lines)-1])
 	}
 }
 
-func TestListViewExactFitKeepsBottomBarPinned(t *testing.T) {
-	m := newModel(appConfig{}, "juicy-providers.json")
+func TestListViewKeepsResultsPaneAboveBottomBarAcrossViewportHeights(t *testing.T) {
+	border := lipgloss.RoundedBorder()
+
+	tests := []struct {
+		name         string
+		heightOffset int
+	}{
+		{name: "tall-height", heightOffset: 4},
+		{name: "exact-fit", heightOffset: 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModel(appConfig{}, "juicy-providers.json")
+			m.width = 100
+
+			headerHeight, naturalBodyHeight, bottomHeight := listLayoutHeightsForTest(m)
+			m.height = headerHeight + listHeaderGapHeight + bottomHeight + naturalBodyHeight + tc.heightOffset
+
+			view := m.listView()
+			lines := strings.Split(view, "\n")
+
+			if got := lipgloss.Height(view); got != m.height {
+				t.Fatalf("expected view height %d, got %d", m.height, got)
+			}
+			if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+				t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
+			}
+			if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
+				t.Fatalf("expected status on second-to-last line, got %q", lines[len(lines)-2])
+			}
+
+			bodyBottomLine := strings.TrimRight(lines[len(lines)-bottomHeight-1], " ")
+			if !strings.Contains(bodyBottomLine, border.BottomLeft) || !strings.Contains(bodyBottomLine, border.BottomRight) {
+				t.Fatalf("expected results pane bottom border directly above bottom bar, got %q", bodyBottomLine)
+			}
+		})
+	}
+}
+
+func TestListViewKeepsFooterPinnedWhenProviderTextWraps(t *testing.T) {
+	providerConfig := provider{
+		BaseURL: "https://very-long-provider-hostname.example.com/openai-compatible/v1/chat/completions/with/a/path/that/keeps/wrapping/when/the/pane/is-narrow",
+		Models:  []string{"gpt-4o-mini-super-long-model-name-that-wraps-again-and-again", "claude-compatible-model-name-that-also-wraps-a-lot"},
+	}
+	m := newModel(appConfig{Providers: []provider{providerConfig}}, "juicy-providers.json")
 	m.width = 100
 
-	mainContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.renderPageHeader(
-			m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
-			m.tr("提示词：", "Prompt: ")+juicyPrompt,
-		),
-		"",
-		lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			renderTitledPane(m.tr("供应商", "Providers"), listPaneWidth(m.width), m.providerListView()),
-			renderTitledPane(m.tr("结果", "Results"), listPaneWidth(m.width), m.resultListView()),
-		),
-	)
-	bottomContent := lipgloss.JoinVertical(lipgloss.Left,
-		m.statusLine(),
-		renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出"),
-	)
-	m.height = lipgloss.Height(mainContent) + lipgloss.Height(bottomContent)
+	headerHeight, _, bottomHeight := listLayoutHeightsForTest(m)
+	bodyHeight := 10
+	paneWidth := listPaneWidth(m.width)
+	naturalProviderHeight := lipgloss.Height(renderTitledPane(m.tr("供应商", "Providers"), paneWidth, m.providerListView()))
+	if naturalProviderHeight <= bodyHeight {
+		t.Fatalf("test setup invalid: provider pane height %d must exceed body height %d", naturalProviderHeight, bodyHeight)
+	}
+	m.height = headerHeight + listHeaderGapHeight + bottomHeight + bodyHeight
 
 	view := m.listView()
 	lines := strings.Split(view, "\n")
+	border := lipgloss.RoundedBorder()
 
 	if got := lipgloss.Height(view); got != m.height {
-		t.Fatalf("expected exact-fit view height %d, got %d", m.height, got)
+		t.Fatalf("expected view height %d, got %d", m.height, got)
 	}
 	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
 		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
 	}
 	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
 		t.Fatalf("expected status on second-to-last line, got %q", lines[len(lines)-2])
+	}
+
+	bodyBottomLine := strings.TrimRight(lines[len(lines)-bottomHeight-1], " ")
+	if !strings.Contains(bodyBottomLine, border.BottomLeft) || !strings.Contains(bodyBottomLine, border.BottomRight) {
+		t.Fatalf("expected pane bottom border directly above bottom bar, got %q", bodyBottomLine)
+	}
+	if !strings.Contains(view, "very-long-provider-") {
+		t.Fatalf("expected wrapped provider text in list view, got %q", view)
+	}
+}
+
+func TestListViewClampsGracefullyForZeroAndSmallHeights(t *testing.T) {
+	tests := []struct {
+		name   string
+		height int
+	}{
+		{name: "zero-height", height: 0},
+		{name: "small-height", height: 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModel(appConfig{}, "juicy-providers.json")
+			m.width = 100
+			m.height = tc.height
+
+			assertNoPanic(t, func() {
+				view := m.listView()
+				lines := strings.Split(view, "\n")
+
+				if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+					t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
+				}
+				if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
+					t.Fatalf("expected status on second-to-last line, got %q", lines[len(lines)-2])
+				}
+
+				headerHeight, _, bottomHeight := listLayoutHeightsForTest(m)
+				availableHeight := m.availableListBodyHeight(
+					m.renderPageHeader(
+						m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
+						m.tr("提示词：", "Prompt: ")+juicyPrompt,
+					),
+					m.listBottomContent(),
+				)
+				if availableHeight != 0 {
+					t.Fatalf("expected clamped available height 0, got %d", availableHeight)
+				}
+				if headerHeight+listHeaderGapHeight+bottomHeight <= tc.height {
+					t.Fatalf("test setup invalid: header and bottom bar should exceed viewport height %d", tc.height)
+				}
+			})
+		})
+	}
+}
+
+func TestListViewKeepsFooterPinnedWhenProviderContentIsTall(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{
+		{BaseURL: "https://one", Models: []string{"a", "b", "c"}},
+		{BaseURL: "https://two", Models: []string{"a", "b", "c"}},
+		{BaseURL: "https://three", Models: []string{"a", "b", "c"}},
+		{BaseURL: "https://four", Models: []string{"a", "b", "c"}},
+		{BaseURL: "https://five", Models: []string{"a", "b", "c"}},
+		{BaseURL: "https://six", Models: []string{"a", "b", "c"}},
+	}}, "juicy-providers.json")
+	m.width = 100
+
+	headerHeight, _, bottomHeight := listLayoutHeightsForTest(m)
+	bodyHeight := 10
+	m.height = headerHeight + listHeaderGapHeight + bottomHeight + bodyHeight
+
+	view := m.listView()
+	lines := strings.Split(view, "\n")
+	border := lipgloss.RoundedBorder()
+
+	if got := lipgloss.Height(view); got != m.height {
+		t.Fatalf("expected view height %d, got %d", m.height, got)
+	}
+	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
+	}
+	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
+		t.Fatalf("expected status on second-to-last line, got %q", lines[len(lines)-2])
+	}
+
+	bodyBottomLine := strings.TrimRight(lines[len(lines)-bottomHeight-1], " ")
+	if !strings.Contains(bodyBottomLine, border.BottomLeft) || !strings.Contains(bodyBottomLine, border.BottomRight) {
+		t.Fatalf("expected pane bottom border directly above bottom bar, got %q", bodyBottomLine)
 	}
 }
 
@@ -661,4 +790,19 @@ func TestFormViewPinsStatusAndFooterToBottomWhenHeightAvailable(t *testing.T) {
 
 func keyRunes(r rune) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+}
+
+func listLayoutHeightsForTest(m appModel) (headerHeight, bodyHeight, bottomHeight int) {
+	header := m.renderPageHeader(
+		m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
+		m.tr("提示词：", "Prompt: ")+juicyPrompt,
+	)
+	body := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		renderTitledPane(m.tr("供应商", "Providers"), listPaneWidth(m.width), m.providerListView()),
+		renderTitledPane(m.tr("结果", "Results"), listPaneWidth(m.width), m.resultListView()),
+	)
+	bottom := m.listBottomContent()
+
+	return lipgloss.Height(header), lipgloss.Height(body), lipgloss.Height(bottom)
 }

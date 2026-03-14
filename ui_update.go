@@ -19,6 +19,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.applyPlaceholders()
+		m.logWindowSize()
 		return m, nil
 	case spinner.TickMsg:
 		if !m.running {

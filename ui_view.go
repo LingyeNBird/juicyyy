@@ -35,24 +35,52 @@ func (m appModel) listView() string {
 		m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
 		m.tr("提示词：", "Prompt: ")+juicyPrompt,
 	)
-	providerPane := renderTitledPane(m.tr("供应商", "Providers"), listPaneWidth(m.width), m.providerListView())
-	resultPane := renderTitledPane(m.tr("结果", "Results"), listPaneWidth(m.width), m.resultListView())
+	bottomContent := m.listBottomContent()
+	paneWidth := listPaneWidth(m.width)
+	bodyHeight := m.availableListBodyHeight(header, bottomContent)
+	providerPane := renderTitledPaneWithHeight(
+		m.tr("供应商", "Providers"),
+		paneWidth,
+		bodyHeight,
+		m.providerListView(),
+	)
+	resultPane := renderTitledPaneWithHeight(
+		m.tr("结果", "Results"),
+		paneWidth,
+		bodyHeight,
+		m.resultListView(),
+	)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, providerPane, resultPane)
 	mainContent := lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		"",
 		body,
 	)
-	bottomContent := lipgloss.JoinVertical(lipgloss.Left,
+	view := m.renderViewWithBottomBar(mainContent, bottomContent)
+	m.logListLayout(
+		lipgloss.Height(header),
+		lipgloss.Height(bottomContent),
+		bodyHeight,
+		lipgloss.Height(providerPane),
+		lipgloss.Height(resultPane),
+		lipgloss.Height(body),
+		lipgloss.Height(mainContent),
+		lipgloss.Height(view),
+	)
+
+	return view
+}
+
+func (m appModel) listBottomContent() string {
+	return lipgloss.JoinVertical(lipgloss.Left,
 		m.statusLine(),
 		renderShortcutFooter(m.tr("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出", "Keys: a add provider | enter run checks | j/k move | l toggle lang | q quit")),
 	)
-
-	return m.renderViewWithBottomBar(mainContent, bottomContent)
 }
 
 func (m appModel) formView() string {
-	applyInputLocale(m.inputs, m.lang, formPaneWidth(m.width))
+	paneWidth := formPaneWidth(m.width)
+	applyInputLocale(m.inputs, m.lang, paneWidth)
 
 	sections := []string{
 		helperTextStyle.Render(m.tr("请填写 OAI 兼容 base URL、API key 和模型列表（逗号分隔）。", "Fill in an OAI-compatible base URL, API key, and comma-separated models.")),
@@ -61,13 +89,21 @@ func (m appModel) formView() string {
 		sections = append(sections, m.renderFormField(field, m.inputs[i].View()))
 	}
 
-	formPane := renderTitledPane(m.tr("新增供应商", "Add Provider"), formPaneWidth(m.width), strings.Join(sections, "\n\n"))
+	formPane := renderTitledPane(m.tr("新增供应商", "Add Provider"), paneWidth, strings.Join(sections, "\n\n"))
 	bottomContent := lipgloss.JoinVertical(lipgloss.Left,
 		m.statusLine(),
 		renderShortcutFooter(m.tr("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英", "Keys: tab/shift+tab move | enter save | esc cancel | l toggle lang")),
 	)
+	view := m.renderViewWithBottomBar(formPane, bottomContent)
+	m.logFormLayout(
+		paneWidth,
+		lipgloss.Height(formPane),
+		lipgloss.Height(bottomContent),
+		lipgloss.Height(formPane),
+		lipgloss.Height(view),
+	)
 
-	return m.renderViewWithBottomBar(formPane, bottomContent)
+	return view
 }
 
 func (m appModel) renderViewWithBottomBar(mainContent, bottomContent string) string {
@@ -180,6 +216,10 @@ func renderPaneTitle(title string) string {
 
 func renderTitledPane(title string, width int, body string) string {
 	rendered := paneStyle.Width(width).Render(body)
+	return renderTitledPaneFromRendered(title, rendered)
+}
+
+func renderTitledPaneFromRendered(title, rendered string) string {
 	lines := strings.Split(rendered, "\n")
 	if len(lines) == 0 {
 		return rendered
@@ -203,6 +243,42 @@ func renderTitledPane(title string, width int, body string) string {
 	}, "")
 
 	return strings.Join(lines, "\n")
+}
+
+func renderTitledPaneWithHeight(title string, width, height int, body string) string {
+	if height <= 0 {
+		return renderTitledPane(title, width, body)
+	}
+
+	contentHeight := maxInt(0, height-paneVerticalChrome)
+	wrappedBody := wrapPaneBody(width, body)
+	lines := []string{}
+	if wrappedBody != "" {
+		lines = strings.Split(wrappedBody, "\n")
+	}
+
+	switch {
+	case len(lines) > contentHeight:
+		lines = lines[:contentHeight]
+	case len(lines) < contentHeight:
+		lines = append(lines, make([]string, contentHeight-len(lines))...)
+	}
+
+	rendered := paneStyle.Width(width).Render(strings.Join(lines, "\n"))
+	return renderTitledPaneFromRendered(title, rendered)
+}
+
+func wrapPaneBody(width int, body string) string {
+	if body == "" {
+		return ""
+	}
+
+	contentWidth := maxInt(0, width-paneStyle.GetPaddingLeft()-paneStyle.GetPaddingRight())
+	if contentWidth == 0 {
+		return body
+	}
+
+	return lipgloss.NewStyle().Width(contentWidth).Render(body)
 }
 
 func renderFieldLabel(label string) string {

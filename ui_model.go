@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type appLanguage int
@@ -31,6 +32,8 @@ const (
 	minListPaneWidth      = 36
 	minFormPaneWidth      = 72
 	layoutOuterPadding    = 6
+	listHeaderGapHeight   = 1
+	paneVerticalChrome    = 4
 	formInputWidthSlack   = 16
 	minInputWidth         = 24
 )
@@ -45,6 +48,7 @@ const (
 type appModel struct {
 	config       appConfig
 	configPath   string
+	debug        *debugOutput
 	lang         appLanguage
 	mode         viewMode
 	cursor       int
@@ -70,6 +74,7 @@ func newModel(cfg appConfig, configPath string) appModel {
 	m := appModel{
 		config:      cfg,
 		configPath:  configPath,
+		debug:       activeDebugOutput,
 		lang:        langZH,
 		mode:        listMode,
 		inputs:      inputs,
@@ -91,6 +96,14 @@ func listPaneWidth(totalWidth int) int {
 
 func formPaneWidth(totalWidth int) int {
 	return maxInt(minFormPaneWidth, totalWidth-layoutOuterPadding)
+}
+
+func (m appModel) availableListBodyHeight(header, bottomContent string) int {
+	if m.height <= 0 {
+		return 0
+	}
+
+	return maxInt(0, m.height-lipgloss.Height(header)-listHeaderGapHeight-lipgloss.Height(bottomContent))
 }
 
 func inputWidthForFormPane(paneWidth int) int {
