@@ -15,14 +15,3 @@ type modelResult struct {
 	Value string
 	Error string
 }
-
-type viewMode int
-
-const (
-	listMode viewMode = iota
-	addMode
-)
-
-type runFinishedMsg struct {
-	Results []modelResult
-}

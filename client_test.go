@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestSplitModels(t *testing.T) {
@@ -199,4 +201,108 @@ func TestCheckModelDoesNotRetryAPIErrors(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("unexpected call count: got %d want 1", got)
 	}
+}
+
+func TestRunJuicyChecksEmptyModels(t *testing.T) {
+	results := runJuicyChecks(context.Background(), provider{BaseURL: "https://example.com", Models: nil}, 5)
+	if len(results) != 0 {
+		t.Fatalf("expected empty results, got %d", len(results))
+	}
+}
+
+func TestRunJuicyChecksPreservesModelOrder(t *testing.T) {
+	selected := provider{
+		BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+			var req chatCompletionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			switch req.Model {
+			case "slow":
+				time.Sleep(30 * time.Millisecond)
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"1"}}]}`)
+			case "fast":
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"2"}}]}`)
+			case "medium":
+				time.Sleep(10 * time.Millisecond)
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"3"}}]}`)
+			default:
+				t.Fatalf("unexpected model %q", req.Model)
+			}
+		}),
+		Models: []string{"slow", "fast", "medium"},
+	}
+
+	results := runJuicyChecks(context.Background(), selected, 3)
+	if len(results) != 3 {
+		t.Fatalf("unexpected results length: got %d want 3", len(results))
+	}
+	want := []modelResult{{Model: "slow", Value: "1"}, {Model: "fast", Value: "2"}, {Model: "medium", Value: "3"}}
+	for i := range want {
+		if results[i] != want[i] {
+			t.Fatalf("unexpected result at %d: got %+v want %+v", i, results[i], want[i])
+		}
+	}
+}
+
+func TestRunSingleAttemptSetsAuthorizationHeaderWhenAPIKeyPresent(t *testing.T) {
+	selected := provider{BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer secret" {
+			t.Fatalf("unexpected authorization header: %q", got)
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"9"}}]}`)
+	}), APIKey: "secret"}
+
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model")
+	if !outcome.hasNumeric || outcome.formatted != "9" {
+		t.Fatalf("unexpected outcome: %+v", outcome)
+	}
+}
+
+func TestRunSingleAttemptOmitsAuthorizationHeaderWhenAPIKeyEmpty(t *testing.T) {
+	selected := provider{BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("expected empty authorization header, got %q", got)
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"11"}}]}`)
+	})}
+
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model")
+	if !outcome.hasNumeric || outcome.formatted != "11" {
+		t.Fatalf("unexpected outcome: %+v", outcome)
+	}
+}
+
+func TestBuildAPIErrorFallsBackToTrimmedBody(t *testing.T) {
+	body := []byte(strings.Repeat("x", 300))
+	got := buildAPIError(http.StatusBadGateway, nil, body)
+	if !strings.HasPrefix(got, "API 502: ") {
+		t.Fatalf("unexpected prefix: %q", got)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("expected trimmed suffix, got %q", got)
+	}
+}
+
+func TestExtractAssistantTextErrorsOnEmptyContent(t *testing.T) {
+	response := chatCompletionResponse{
+		Choices: []chatCompletionChoice{{
+			Message: chatCompletionChoiceMessage{Content: json.RawMessage(`[]`)},
+		}},
+	}
+
+	_, err := extractAssistantText(response)
+	if err == nil || err.Error() != "response content did not contain text" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func serverURL(t *testing.T, handler func(http.ResponseWriter, *http.Request)) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		handler(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
 }
