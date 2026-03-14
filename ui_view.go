@@ -95,14 +95,17 @@ func (m appModel) formView() string {
 
 func (m appModel) formPaneBody() string {
 	paneWidth := listPaneWidth(m.width)
-	applyInputLocale(m.inputs, m.lang, paneWidth)
+	applyFormLocale(&m.baseURLInput, &m.apiKeyInput, &m.modelsInput, m.lang, paneWidth)
+	syncModelsInputLayout(&m.modelsInput, paneWidth)
 
 	sections := []string{
-		helperTextStyle.Render(m.tr("请填写 OAI 兼容 base URL、API key 和模型列表（逗号分隔）。", "Fill in an OAI-compatible base URL, API key, and comma-separated models.")),
+		helperTextStyle.Render(m.tr("请填写 OAI 兼容 base URL、API key，以及支持逗号或换行的模型列表。", "Fill in an OAI-compatible base URL, API key, and models separated by commas or new lines.")),
 	}
-	for i, field := range formFields {
-		sections = append(sections, m.renderFormField(field, m.inputs[i].View()))
-	}
+	sections = append(sections,
+		m.renderFormField(formFields[addProviderBaseURLField], m.baseURLInput.View()),
+		m.renderFormField(formFields[addProviderAPIKeyField], m.apiKeyInput.View()),
+		m.renderFormField(formFields[addProviderModelsField], m.modelsInput.View()),
+	)
 
 	return strings.Join(sections, "\n\n")
 }
@@ -110,7 +113,7 @@ func (m appModel) formPaneBody() string {
 func (m appModel) formBottomContent() string {
 	bottomContent := lipgloss.JoinVertical(lipgloss.Left,
 		m.statusLine(),
-		renderShortcutFooter(m.tr("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英", "Keys: tab/shift+tab move | enter save | esc cancel | l toggle lang")),
+		renderShortcutFooter(m.tr("快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | enter saves on Base URL/API Key | enter adds a new line in Models | esc cancel | ctrl+l toggle lang")),
 	)
 
 	return bottomContent

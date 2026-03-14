@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -32,8 +33,8 @@ var formFields = []formFieldSpec{
 	},
 	{
 		label:       localizedText{zh: "模型列表", en: "Models"},
-		placeholder: localizedText{zh: "模型列表（逗号分隔）", en: "Models (comma separated)"},
-		helper:      localizedText{zh: "用逗号分隔多个模型名称，不限制长度。", en: "Separate multiple model names with commas; no length limit."},
+		placeholder: localizedText{zh: "每行或逗号分隔一个模型", en: "One model per line or comma separated"},
+		helper:      localizedText{zh: "支持逗号或换行分隔多个模型名称，可直接粘贴多行列表。", en: "Use commas or new lines for multiple model names; paste multi-line lists directly."},
 		kind:        inputKindModels,
 	},
 }
@@ -53,19 +54,24 @@ func (m appModel) tr(zh, en string) string {
 }
 
 func (m *appModel) applyPlaceholders() {
-	paneWidth := formPaneWidth(m.width)
-	if m.mode == addMode {
-		paneWidth = listPaneWidth(m.width)
-	}
-	applyInputLocale(m.inputs, m.lang, paneWidth)
+	applyFormLocale(&m.baseURLInput, &m.apiKeyInput, &m.modelsInput, m.lang, m.activeFormPaneWidth())
 }
 
-func applyInputLocale(inputs []textinput.Model, lang appLanguage, paneWidth int) {
+func applyFormLocale(baseURLInput, apiKeyInput *textinput.Model, modelsInput *textarea.Model, lang appLanguage, paneWidth int) {
 	inputWidth := inputWidthForFormPane(paneWidth)
-	for i := range inputs {
-		inputs[i].Placeholder = safePlaceholder(formFields[i].placeholder.forLang(lang))
-		inputs[i].Width = inputWidth
-	}
+	applyTextInputLocale(baseURLInput, formFields[addProviderBaseURLField], lang, inputWidth)
+	applyTextInputLocale(apiKeyInput, formFields[addProviderAPIKeyField], lang, inputWidth)
+	applyTextareaLocale(modelsInput, formFields[addProviderModelsField], lang)
+	syncModelsInputLayout(modelsInput, paneWidth)
+}
+
+func applyTextInputLocale(input *textinput.Model, field formFieldSpec, lang appLanguage, inputWidth int) {
+	input.Placeholder = safePlaceholder(field.placeholder.forLang(lang))
+	input.Width = inputWidth
+}
+
+func applyTextareaLocale(input *textarea.Model, field formFieldSpec, lang appLanguage) {
+	input.Placeholder = safePlaceholder(field.placeholder.forLang(lang))
 }
 
 func placeholderHasWideRunes(text string) bool {

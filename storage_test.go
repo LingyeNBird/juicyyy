@@ -108,6 +108,39 @@ func TestSaveConfigWritesIndentedJSONWithTrailingNewline(t *testing.T) {
 	}
 }
 
+func TestSplitModelsSupportsCommasAndNewLines(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{
+			name: "new lines",
+			raw:  "gpt-4o-mini\nqwen-max\nclaude-3.5-sonnet",
+			want: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"},
+		},
+		{
+			name: "mixed separators with blanks and duplicates",
+			raw:  " gpt-4o-mini,\nqwen-max\r\n\nclaude-3.5-sonnet, qwen-max , , gpt-4o-mini ",
+			want: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitModels(tt.raw)
+			if len(got) != len(tt.want) {
+				t.Fatalf("unexpected models length: got %d want %d (%q)", len(got), len(tt.want), tt.raw)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("unexpected model at %d: got %q want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestNormalizeBaseURL(t *testing.T) {
 	tests := []struct {
 		name    string

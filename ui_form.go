@@ -1,18 +1,21 @@
 package main
 
 import (
+	"strings"
+
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-func newInputs(lang appLanguage) []textinput.Model {
-	inputs := make([]textinput.Model, len(formFields))
-	for i, field := range formFields {
-		inputs[i] = newInput(field.kind)
-	}
-	applyInputLocale(inputs, lang, formPaneWidth(0))
-	inputs[0].Focus()
-	return inputs
+func newProviderInputs(lang appLanguage) (textinput.Model, textinput.Model, textarea.Model) {
+	baseURLInput := newInput(inputKindText)
+	apiKeyInput := newInput(inputKindPassword)
+	modelsInput := newModelsInput()
+	applyFormLocale(&baseURLInput, &apiKeyInput, &modelsInput, lang, formPaneWidth(0))
+	baseURLInput.Focus()
+	return baseURLInput, apiKeyInput, modelsInput
 }
 
 func newPromptInput() textinput.Model {
@@ -35,44 +38,172 @@ func newInput(kind inputKind) textinput.Model {
 	case inputKindPassword:
 		input.EchoMode = textinput.EchoPassword
 		input.EchoCharacter = '*'
-	case inputKindModels:
-		input.CharLimit = 0
 	}
 	return input
 }
 
-func (m appModel) updateInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
-	cmds := make([]tea.Cmd, len(m.inputs))
-	for i := range m.inputs {
-		if i == m.focusIndex {
-			m.inputs[i], cmds[i] = m.inputs[i].Update(msg)
-		}
+func newModelsInput() textarea.Model {
+	return newStyledModelsInput("", "", false, formPaneWidth(0))
+}
+
+func newStyledModelsInput(value, placeholder string, focused bool, paneWidth int) textarea.Model {
+	input := textarea.New()
+	input.CharLimit = 0
+	input.ShowLineNumbers = false
+	input.FocusedStyle.Text = inputStyle
+	input.FocusedStyle.CursorLine = inputStyle
+	input.BlurredStyle.Text = inputStyle
+	input.BlurredStyle.CursorLine = inputStyle
+	input.Placeholder = placeholder
+	if value != "" {
+		input.SetValue(value)
 	}
-	return m, tea.Batch(cmds...)
+	if focused {
+		input.Focus()
+	} else {
+		input.Blur()
+	}
+	syncModelsInputLayout(&input, paneWidth)
+	return input
+}
+
+func syncModelsInputLayout(input *textarea.Model, paneWidth int) {
+	input.Prompt = modelsInputPrompt
+	input.SetPromptFunc(lipgloss.Width(modelsInputPrompt), func(lineIdx int) string {
+		if lineIdx == 0 {
+			return modelsInputPrompt
+		}
+		return modelsInputIndent
+	})
+	input.SetWidth(modelsInputWidthForPane(paneWidth))
+	input.SetHeight(modelsInputHeightForValue(input.Value(), paneWidth))
+}
+
+func (m appModel) updateInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch m.focusIndex {
+	case addProviderBaseURLField:
+		var cmd tea.Cmd
+		m.baseURLInput, cmd = m.baseURLInput.Update(msg)
+		return m, cmd
+	case addProviderAPIKeyField:
+		var cmd tea.Cmd
+		m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
+		return m, cmd
+	case addProviderModelsField:
+		return m.updateModelsInput(msg)
+	}
+	return m, nil
+}
+
+func (m appModel) updateModelsInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	paneWidth := m.activeFormPaneWidth()
+	oldHeight := m.modelsInput.Height()
+
+	var cmd tea.Cmd
+	m.modelsInput, cmd = m.modelsInput.Update(msg)
+	syncModelsInputLayout(&m.modelsInput, paneWidth)
+
+	if modelsInputNeedsViewportReset(m.modelsInput, oldHeight) {
+		m.modelsInput = rebuildModelsInput(m.modelsInput, paneWidth)
+	}
+
+	return m, cmd
+}
+
+func modelsInputNeedsViewportReset(input textarea.Model, oldHeight int) bool {
+	if input.Height() <= oldHeight {
+		return false
+	}
+	return modelsInputWrappedCursorRow(input) >= oldHeight
+}
+
+func modelsInputWrappedCursorRow(input textarea.Model) int {
+	row := 0
+	for _, line := range strings.Split(input.Value(), "\n")[:input.Line()] {
+		row += len(wrapTextareaLine([]rune(line), input.Width()))
+	}
+	return row + input.LineInfo().RowOffset
+}
+
+func modelsInputCursorColumn(input textarea.Model) int {
+	lineInfo := input.LineInfo()
+	return lineInfo.StartColumn + lineInfo.ColumnOffset
+}
+
+func rebuildModelsInput(input textarea.Model, paneWidth int) textarea.Model {
+	rebuilt := newStyledModelsInput(input.Value(), input.Placeholder, input.Focused(), paneWidth)
+	restoreModelsInputCursor(&rebuilt, input.Line(), modelsInputCursorColumn(input))
+	return rebuilt
+}
+
+func restoreModelsInputCursor(input *textarea.Model, targetRow, targetCol int) {
+	if targetRow < 0 {
+		targetRow = 0
+	}
+	if targetCol < 0 {
+		targetCol = 0
+	}
+	if lineCount := input.LineCount(); lineCount > 0 && targetRow >= lineCount {
+		targetRow = lineCount - 1
+	}
+
+	for input.Line() > 0 {
+		input.CursorUp()
+	}
+	input.CursorStart()
+
+	for step, maxSteps := 0, wrappedVisibleRowCount(input.Value(), input.Width()); input.Line() < targetRow && step < maxSteps; step++ {
+		input.CursorDown()
+	}
+	input.SetCursor(targetCol)
 }
 
 func (m *appModel) resetForm() {
-	for i := range m.inputs {
-		m.inputs[i].SetValue("")
-		m.inputs[i].Blur()
-	}
+	m.baseURLInput.SetValue("")
+	m.baseURLInput.Blur()
+	m.apiKeyInput.SetValue("")
+	m.apiKeyInput.Blur()
+	m.modelsInput.SetValue("")
+	m.modelsInput.Blur()
 	m.focusIndex = 0
 	m.applyPlaceholders()
-	m.inputs[0].Focus()
+	m.baseURLInput.Focus()
 }
 
 func (m *appModel) cycleFocus(direction string) {
-	m.inputs[m.focusIndex].Blur()
+	m.blurFocusedInput()
 	if direction == "shift+tab" || direction == "up" {
 		m.focusIndex--
 	} else {
 		m.focusIndex++
 	}
 	if m.focusIndex < 0 {
-		m.focusIndex = len(m.inputs) - 1
+		m.focusIndex = addProviderFieldCount - 1
 	}
-	if m.focusIndex >= len(m.inputs) {
+	if m.focusIndex >= addProviderFieldCount {
 		m.focusIndex = 0
 	}
-	m.inputs[m.focusIndex].Focus()
+	m.focusCurrentInput()
+}
+
+func (m *appModel) blurFocusedInput() {
+	switch m.focusIndex {
+	case addProviderBaseURLField:
+		m.baseURLInput.Blur()
+	case addProviderAPIKeyField:
+		m.apiKeyInput.Blur()
+	case addProviderModelsField:
+		m.modelsInput.Blur()
+	}
+}
+
+func (m *appModel) focusCurrentInput() {
+	switch m.focusIndex {
+	case addProviderBaseURLField:
+		m.baseURLInput.Focus()
+	case addProviderAPIKeyField:
+		m.apiKeyInput.Focus()
+	case addProviderModelsField:
+		m.modelsInput.Focus()
+	}
 }

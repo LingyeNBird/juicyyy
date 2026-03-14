@@ -40,7 +40,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handlePromptKeys(msg)
 		}
 
-		if key == "l" {
+		if key == "ctrl+l" || (key == "l" && m.mode != addMode) {
 			m.toggleLanguage()
 			return m, nil
 		}
@@ -100,9 +100,15 @@ func (m appModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cancelAddMode()
 		return m, nil
 	case "tab", "shift+tab", "up", "down":
+		if m.focusIndex == addProviderModelsField && (msg.String() == "up" || msg.String() == "down") {
+			return m.updateInputs(msg)
+		}
 		m.cycleFocus(msg.String())
 		return m, nil
 	case "enter":
+		if m.focusIndex == addProviderModelsField {
+			return m.updateInputs(msg)
+		}
 		provider, err := m.buildProviderFromInputs()
 		if err != nil {
 			m.setStatus(statusError, err.Error())
@@ -157,7 +163,7 @@ func (m *appModel) enterAddMode() {
 	m.blurPromptInput()
 	m.mode = addMode
 	m.resetForm()
-	m.setStatus(statusInfo, m.tr("新增供应商：回车保存，Esc 取消。", "Add a provider. Press Enter to save or Esc to cancel."))
+	m.setStatus(statusInfo, m.tr("新增供应商：模型支持逗号或换行；在基础 URL 或 API 密钥上按回车保存，Esc 取消。", "Add a provider. Models accept commas or new lines; press Enter on Base URL or API Key to save, or Esc to cancel."))
 }
 
 func (m *appModel) cancelAddMode() {
@@ -188,18 +194,18 @@ func (m *appModel) blurPromptInput() {
 }
 
 func (m *appModel) buildProviderFromInputs() (provider, error) {
-	baseURL, err := normalizeBaseURL(m.inputs[0].Value())
+	baseURL, err := normalizeBaseURL(m.baseURLInput.Value())
 	if err != nil {
 		return provider{}, fmt.Errorf(m.tr("URL 无效：%v", "Invalid URL: %v"), err)
 	}
-	models := splitModels(m.inputs[2].Value())
+	models := splitModels(m.modelsInput.Value())
 	if len(models) == 0 {
 		return provider{}, errors.New(m.tr("至少填写一个模型。", "At least one model is required."))
 	}
 
 	return provider{
 		BaseURL: baseURL,
-		APIKey:  strings.TrimSpace(m.inputs[1].Value()),
+		APIKey:  strings.TrimSpace(m.apiKeyInput.Value()),
 		Models:  models,
 	}, nil
 }

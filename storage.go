@@ -49,7 +49,9 @@ func saveConfig(path string, cfg appConfig) error {
 }
 
 func splitModels(raw string) []string {
-	parts := strings.Split(raw, ",")
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
 	models := make([]string, 0, len(parts))
 	seen := make(map[string]struct{}, len(parts))
 
