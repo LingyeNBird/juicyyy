@@ -6,36 +6,28 @@ import (
 )
 
 func newInputs(lang appLanguage) []textinput.Model {
-	inputs := []textinput.Model{
-		newInput(""),
-		newPasswordInput(""),
-		newModelInput(""),
+	inputs := make([]textinput.Model, len(formFields))
+	for i, field := range formFields {
+		inputs[i] = newInput(field.kind)
 	}
-	applyInputLocale(inputs, lang)
+	applyInputLocale(inputs, lang, formPaneWidth(0))
 	inputs[0].Focus()
 	return inputs
 }
 
-func newInput(placeholder string) textinput.Model {
+func newInput(kind inputKind) textinput.Model {
 	input := textinput.New()
-	input.Placeholder = placeholder
 	input.Prompt = "> "
 	input.CharLimit = defaultInputCharLimit
-	input.Width = defaultInputWidth
+	input.Width = inputWidthForFormPane(formPaneWidth(0))
 	input.TextStyle = inputStyle
-	return input
-}
-
-func newModelInput(placeholder string) textinput.Model {
-	input := newInput(placeholder)
-	input.CharLimit = 0
-	return input
-}
-
-func newPasswordInput(placeholder string) textinput.Model {
-	input := newInput(placeholder)
-	input.EchoMode = textinput.EchoPassword
-	input.EchoCharacter = '*'
+	switch kind {
+	case inputKindPassword:
+		input.EchoMode = textinput.EchoPassword
+		input.EchoCharacter = '*'
+	case inputKindModels:
+		input.CharLimit = 0
+	}
 	return input
 }
 
@@ -55,6 +47,7 @@ func (m *appModel) resetForm() {
 		m.inputs[i].Blur()
 	}
 	m.focusIndex = 0
+	m.applyPlaceholders()
 	m.inputs[0].Focus()
 }
 

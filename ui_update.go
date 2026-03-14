@@ -18,6 +18,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.applyPlaceholders()
 		return m, nil
 	case spinner.TickMsg:
 		if !m.running {
@@ -56,7 +57,7 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "up", "k", "down", "j", "a", "enter":
 		if m.running {
-			m.status = m.tr("检测进行中，请等待完成后再切换或操作。", "Checks are still running. Wait for completion before changing providers.")
+			m.setStatus(statusWarning, m.tr("检测进行中，请等待完成后再切换或操作。", "Checks are still running. Wait for completion before changing providers."))
 			return m, nil
 		}
 	}
@@ -74,7 +75,7 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.enterAddMode()
 	case "enter":
 		if len(m.config.Providers) == 0 {
-			m.status = m.tr("请先新增至少一个供应商后再检测。", "Add at least one provider before running checks.")
+			m.setStatus(statusWarning, m.tr("请先新增至少一个供应商后再检测。", "Add at least one provider before running checks."))
 			return m, nil
 		}
 		return m, tea.Batch(m.spinner.Tick, m.startChecks())
@@ -94,18 +95,18 @@ func (m appModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		provider, err := m.buildProviderFromInputs()
 		if err != nil {
-			m.status = err.Error()
+			m.setStatus(statusError, err.Error())
 			return m, nil
 		}
 		if err := m.saveProvider(provider); err != nil {
-			m.status = fmt.Sprintf(m.tr("保存配置失败：%v", "Save config failed: %v"), err)
+			m.setStatus(statusError, fmt.Sprintf(m.tr("保存配置失败：%v", "Save config failed: %v"), err))
 			return m, nil
 		}
 
 		m.mode = listMode
 		m.cursor = len(m.config.Providers) - 1
-		m.status = fmt.Sprintf(m.tr("已保存供应商 %s，共 %d 个模型。", "Saved provider %s with %d model(s)."), provider.BaseURL, len(provider.Models))
 		m.resetForm()
+		m.setStatus(statusSuccess, fmt.Sprintf(m.tr("已保存供应商 %s，共 %d 个模型。", "Saved provider %s with %d model(s)."), provider.BaseURL, len(provider.Models)))
 		return m, nil
 	}
 
@@ -122,23 +123,23 @@ func (m *appModel) finishRun(results []modelResult) {
 		}
 	}
 	if len(results) == 0 {
-		m.status = m.tr("当前供应商没有可检测模型。", "Selected provider has no models.")
+		m.setStatus(statusWarning, m.tr("当前供应商没有可检测模型。", "Selected provider has no models."))
 	} else if failures == 0 {
-		m.status = fmt.Sprintf(m.tr("已完成 %d 个模型检测。", "Finished %d model checks."), len(results))
+		m.setStatus(statusSuccess, fmt.Sprintf(m.tr("已完成 %d 个模型检测。", "Finished %d model checks."), len(results)))
 	} else {
-		m.status = fmt.Sprintf(m.tr("检测完成，错误 %d/%d。", "Finished with %d/%d errors."), failures, len(results))
+		m.setStatus(statusWarning, fmt.Sprintf(m.tr("检测完成，错误 %d/%d。", "Finished with %d/%d errors."), failures, len(results)))
 	}
 }
 
 func (m *appModel) enterAddMode() {
 	m.mode = addMode
-	m.status = m.tr("新增供应商：回车保存，Esc 取消。", "Add a provider. Press Enter to save or Esc to cancel.")
 	m.resetForm()
+	m.setStatus(statusInfo, m.tr("新增供应商：回车保存，Esc 取消。", "Add a provider. Press Enter to save or Esc to cancel."))
 }
 
 func (m *appModel) cancelAddMode() {
 	m.mode = listMode
-	m.status = m.tr("已取消新增供应商。", "Canceled adding provider.")
+	m.setStatus(statusInfo, m.tr("已取消新增供应商。", "Canceled adding provider."))
 }
 
 func (m *appModel) startChecks() tea.Cmd {
@@ -146,9 +147,9 @@ func (m *appModel) startChecks() tea.Cmd {
 	m.running = true
 	m.results = nil
 	if m.lang == langEN {
-		m.status = fmt.Sprintf("Checking %d model(s) from %s with concurrency %d...", len(selected.Models), selected.BaseURL, m.concurrency)
+		m.setStatus(statusLoading, fmt.Sprintf("Checking %d model(s) from %s with concurrency %d...", len(selected.Models), selected.BaseURL, m.concurrency))
 	} else {
-		m.status = fmt.Sprintf("正在检测 %s 的 %d 个模型（并发 %d）...", selected.BaseURL, len(selected.Models), m.concurrency)
+		m.setStatus(statusLoading, fmt.Sprintf("正在检测 %s 的 %d 个模型（并发 %d）...", selected.BaseURL, len(selected.Models), m.concurrency))
 	}
 	return runChecksCmd(selected, m.concurrency)
 }

@@ -9,11 +9,30 @@ import (
 
 type appLanguage int
 
+type statusKind int
+
+type inputKind int
+
 const (
 	langZH appLanguage = iota
 	langEN
-	defaultInputWidth     = 56
+
+	statusInfo statusKind = iota
+	statusSuccess
+	statusError
+	statusWarning
+	statusLoading
+
+	inputKindText inputKind = iota
+	inputKindPassword
+	inputKindModels
+
 	defaultInputCharLimit = 512
+	minListPaneWidth      = 36
+	minFormPaneWidth      = 72
+	layoutOuterPadding    = 6
+	formInputWidthSlack   = 16
+	minInputWidth         = 24
 )
 
 type viewMode int
@@ -35,6 +54,7 @@ type appModel struct {
 	width        int
 	height       int
 	status       string
+	statusKind   statusKind
 	results      []modelResult
 	running      bool
 	spinner      spinner.Model
@@ -44,18 +64,35 @@ type appModel struct {
 func newModel(cfg appConfig, configPath string) appModel {
 	spin := spinner.New()
 	spin.Spinner = spinner.Line
-	spin.Style = goodStyle
+	spin.Style = loadingStyle
 
 	inputs := newInputs(langZH)
-
-	return appModel{
+	m := appModel{
 		config:      cfg,
 		configPath:  configPath,
 		lang:        langZH,
 		mode:        listMode,
 		inputs:      inputs,
-		status:      fmt.Sprintf("配置文件：%s", configPath),
 		spinner:     spin,
 		concurrency: 5,
 	}
+	m.setStatus(statusInfo, fmt.Sprintf("配置文件：%s", configPath))
+	return m
+}
+
+func (m *appModel) setStatus(kind statusKind, text string) {
+	m.statusKind = kind
+	m.status = text
+}
+
+func listPaneWidth(totalWidth int) int {
+	return maxInt(minListPaneWidth, totalWidth/2-layoutOuterPadding/2)
+}
+
+func formPaneWidth(totalWidth int) int {
+	return maxInt(minFormPaneWidth, totalWidth-layoutOuterPadding)
+}
+
+func inputWidthForFormPane(paneWidth int) int {
+	return maxInt(minInputWidth, paneWidth-formInputWidthSlack)
 }
