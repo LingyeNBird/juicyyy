@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func assertNoPanic(t *testing.T, fn func()) {
@@ -488,6 +489,68 @@ func TestListViewUsesSharedHeadersAndEmptyStates(t *testing.T) {
 	}
 }
 
+func TestListViewPinsStatusAndFooterToBottomWhenHeightAvailable(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.width = 100
+	m.height = 20
+
+	view := m.listView()
+	lines := strings.Split(view, "\n")
+	footer := renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出")
+
+	if got := lipgloss.Height(view); got != m.height {
+		t.Fatalf("expected view height %d, got %d", m.height, got)
+	}
+	if strings.TrimRight(lines[len(lines)-1], " ") != footer {
+		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
+	}
+	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
+		t.Fatalf("expected status on second-to-last line, got %q", lines[len(lines)-2])
+	}
+	if !strings.Contains(view, pageTitleStyle.Render("Juicy 批量检测器")) {
+		t.Fatalf("expected list header content preserved: %q", view)
+	}
+	if !strings.Contains(view, renderPaneTitle("供应商")) || !strings.Contains(view, renderPaneTitle("结果")) {
+		t.Fatalf("expected list panes preserved: %q", view)
+	}
+}
+
+func TestListViewExactFitKeepsBottomBarPinned(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.width = 100
+
+	mainContent := lipgloss.JoinVertical(lipgloss.Left,
+		m.renderPageHeader(
+			m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
+			m.tr("提示词：", "Prompt: ")+juicyPrompt,
+		),
+		"",
+		lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			renderTitledPane(m.tr("供应商", "Providers"), listPaneWidth(m.width), m.providerListView()),
+			renderTitledPane(m.tr("结果", "Results"), listPaneWidth(m.width), m.resultListView()),
+		),
+	)
+	bottomContent := lipgloss.JoinVertical(lipgloss.Left,
+		m.statusLine(),
+		renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出"),
+	)
+	m.height = lipgloss.Height(mainContent) + lipgloss.Height(bottomContent)
+
+	view := m.listView()
+	lines := strings.Split(view, "\n")
+
+	if got := lipgloss.Height(view); got != m.height {
+		t.Fatalf("expected exact-fit view height %d, got %d", m.height, got)
+	}
+	if strings.TrimRight(lines[len(lines)-1], " ") != renderShortcutFooter("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出") {
+		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
+	}
+	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
+		t.Fatalf("expected status on second-to-last line, got %q", lines[len(lines)-2])
+	}
+}
+
 func TestFormViewShowsFieldGuidanceInBothLanguages(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -565,6 +628,34 @@ func TestFormViewShowsFieldGuidanceInBothLanguages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFormViewPinsStatusAndFooterToBottomWhenHeightAvailable(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 20
+	m.applyPlaceholders()
+
+	view := m.formView()
+	lines := strings.Split(view, "\n")
+	footer := renderShortcutFooter("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英")
+
+	if got := lipgloss.Height(view); got != m.height {
+		t.Fatalf("expected view height %d, got %d", m.height, got)
+	}
+	if strings.TrimRight(lines[len(lines)-1], " ") != footer {
+		t.Fatalf("expected footer on last line, got %q", lines[len(lines)-1])
+	}
+	if strings.TrimRight(lines[len(lines)-2], " ") != m.statusLine() {
+		t.Fatalf("expected status on second-to-last line, got %q", lines[len(lines)-2])
+	}
+	if !strings.Contains(view, renderPaneTitle("新增供应商")) {
+		t.Fatalf("expected form pane content preserved: %q", view)
+	}
+	if !strings.Contains(view, helperTextStyle.Render("请填写 OAI 兼容 base URL、API key 和模型列表（逗号分隔）。")) {
+		t.Fatalf("expected form intro preserved: %q", view)
 	}
 }
 

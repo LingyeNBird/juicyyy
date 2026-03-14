@@ -38,16 +38,17 @@ func (m appModel) listView() string {
 	providerPane := renderTitledPane(m.tr("供应商", "Providers"), listPaneWidth(m.width), m.providerListView())
 	resultPane := renderTitledPane(m.tr("结果", "Results"), listPaneWidth(m.width), m.resultListView())
 	body := lipgloss.JoinHorizontal(lipgloss.Top, providerPane, resultPane)
-	footer := renderShortcutFooter(m.tr("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出", "Keys: a add provider | enter run checks | j/k move | l toggle lang | q quit"))
-
-	return lipgloss.JoinVertical(lipgloss.Left,
+	mainContent := lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		"",
 		body,
-		"",
-		m.statusLine(),
-		footer,
 	)
+	bottomContent := lipgloss.JoinVertical(lipgloss.Left,
+		m.statusLine(),
+		renderShortcutFooter(m.tr("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出", "Keys: a add provider | enter run checks | j/k move | l toggle lang | q quit")),
+	)
+
+	return m.renderViewWithBottomBar(mainContent, bottomContent)
 }
 
 func (m appModel) formView() string {
@@ -61,13 +62,35 @@ func (m appModel) formView() string {
 	}
 
 	formPane := renderTitledPane(m.tr("新增供应商", "Add Provider"), formPaneWidth(m.width), strings.Join(sections, "\n\n"))
-	footer := renderShortcutFooter(m.tr("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英", "Keys: tab/shift+tab move | enter save | esc cancel | l toggle lang"))
+	bottomContent := lipgloss.JoinVertical(lipgloss.Left,
+		m.statusLine(),
+		renderShortcutFooter(m.tr("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英", "Keys: tab/shift+tab move | enter save | esc cancel | l toggle lang")),
+	)
+
+	return m.renderViewWithBottomBar(formPane, bottomContent)
+}
+
+func (m appModel) renderViewWithBottomBar(mainContent, bottomContent string) string {
+	if m.height <= 0 {
+		return lipgloss.JoinVertical(lipgloss.Left,
+			mainContent,
+			bottomContent,
+		)
+	}
+
+	remainingHeight := m.height - lipgloss.Height(mainContent) - lipgloss.Height(bottomContent)
+	if remainingHeight > 0 {
+		spacer := lipgloss.NewStyle().Height(remainingHeight).Render("")
+		return lipgloss.JoinVertical(lipgloss.Left,
+			mainContent,
+			spacer,
+			bottomContent,
+		)
+	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		formPane,
-		"",
-		m.statusLine(),
-		footer,
+		mainContent,
+		bottomContent,
 	)
 }
 
