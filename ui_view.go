@@ -8,19 +8,19 @@ import (
 )
 
 var (
-	pageTitleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("153")).Padding(0, 1)
-	sectionTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("177"))
-	fieldLabelStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
-	helperTextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
-	mutedStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
-	selectionStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("153"))
-	loadingStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
-	successStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))
-	errorStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	infoStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
-	warningStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("213"))
-	paneStyle         = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("242")).Padding(1)
-	inputStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	pageTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("153")).Padding(0, 1)
+	fieldLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	helperTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	mutedStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
+	selectionStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("153"))
+	loadingStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+	successStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("78"))
+	errorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	infoStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("111"))
+	warningStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("213"))
+	paneBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("177"))
+	paneStyle       = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("177")).Padding(1)
+	inputStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 )
 
 func (m appModel) View() string {
@@ -35,8 +35,8 @@ func (m appModel) listView() string {
 		m.tr("Juicy 批量检测器", "Juicy Batch Checker"),
 		m.tr("提示词：", "Prompt: ")+juicyPrompt,
 	)
-	providerPane := paneStyle.Width(listPaneWidth(m.width)).Render(m.providerListView())
-	resultPane := paneStyle.Width(listPaneWidth(m.width)).Render(m.resultListView())
+	providerPane := renderTitledPane(m.tr("供应商", "Providers"), listPaneWidth(m.width), m.providerListView())
+	resultPane := renderTitledPane(m.tr("结果", "Results"), listPaneWidth(m.width), m.resultListView())
 	body := lipgloss.JoinHorizontal(lipgloss.Top, providerPane, resultPane)
 	footer := renderShortcutFooter(m.tr("快捷键：a 新增供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出", "Keys: a add provider | enter run checks | j/k move | l toggle lang | q quit"))
 
@@ -54,16 +54,13 @@ func (m appModel) formView() string {
 	applyInputLocale(m.inputs, m.lang, formPaneWidth(m.width))
 
 	sections := []string{
-		m.renderPageHeader(
-			m.tr("新增供应商", "Add Provider"),
-			m.tr("请填写 OAI 兼容 base URL、API key 和模型列表（逗号分隔）。", "Fill in an OAI-compatible base URL, API key, and comma-separated models."),
-		),
+		helperTextStyle.Render(m.tr("请填写 OAI 兼容 base URL、API key 和模型列表（逗号分隔）。", "Fill in an OAI-compatible base URL, API key, and comma-separated models.")),
 	}
 	for i, field := range formFields {
 		sections = append(sections, m.renderFormField(field, m.inputs[i].View()))
 	}
 
-	formPane := paneStyle.Width(formPaneWidth(m.width)).Render(strings.Join(sections, "\n\n"))
+	formPane := renderTitledPane(m.tr("新增供应商", "Add Provider"), formPaneWidth(m.width), strings.Join(sections, "\n\n"))
 	footer := renderShortcutFooter(m.tr("快捷键：tab/shift+tab 切换焦点 | Enter 保存 | Esc 取消 | l 切换中英", "Keys: tab/shift+tab move | enter save | esc cancel | l toggle lang"))
 
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -75,7 +72,7 @@ func (m appModel) formView() string {
 }
 
 func (m appModel) providerListView() string {
-	lines := []string{renderSectionHeader(m.tr("供应商", "Providers")), ""}
+	lines := []string{}
 	if len(m.config.Providers) == 0 {
 		lines = append(lines, renderEmptyState(m.tr("还没有保存任何供应商，按 'a' 新增。", "No providers saved yet. Press 'a' to add one.")))
 		return strings.Join(lines, "\n")
@@ -96,7 +93,7 @@ func (m appModel) providerListView() string {
 }
 
 func (m appModel) resultListView() string {
-	lines := []string{renderSectionHeader(m.tr("结果", "Results")), ""}
+	lines := []string{}
 	if m.running {
 		lines = append(lines, loadingStyle.Render(m.spinner.View()+" "+m.tr("正在执行检测...", "Running juicy checks...")))
 	}
@@ -154,8 +151,35 @@ func (m appModel) renderFormField(field formFieldSpec, inputView string) string 
 	}, "\n")
 }
 
-func renderSectionHeader(title string) string {
-	return sectionTitleStyle.Render(title)
+func renderPaneTitle(title string) string {
+	return paneBorderStyle.Copy().Bold(true).Render("|" + title + "|")
+}
+
+func renderTitledPane(title string, width int, body string) string {
+	rendered := paneStyle.Width(width).Render(body)
+	lines := strings.Split(rendered, "\n")
+	if len(lines) == 0 {
+		return rendered
+	}
+
+	border := lipgloss.RoundedBorder()
+	titleText := renderPaneTitle(title)
+	visibleTitleWidth := lipgloss.Width("|" + title + "|")
+	interiorWidth := maxInt(0, lipgloss.Width(lines[0])-2)
+	leftRun := 1
+	rightRun := interiorWidth - leftRun - visibleTitleWidth
+	if rightRun < 0 {
+		rightRun = 0
+		leftRun = maxInt(0, interiorWidth-visibleTitleWidth)
+	}
+
+	lines[0] = strings.Join([]string{
+		paneBorderStyle.Render(border.TopLeft + strings.Repeat(border.Top, leftRun)),
+		titleText,
+		paneBorderStyle.Render(strings.Repeat(border.Top, rightRun) + border.TopRight),
+	}, "")
+
+	return strings.Join(lines, "\n")
 }
 
 func renderFieldLabel(label string) string {

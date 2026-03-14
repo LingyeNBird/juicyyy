@@ -469,11 +469,11 @@ func TestListViewUsesSharedHeadersAndEmptyStates(t *testing.T) {
 			if !strings.Contains(view, pageTitleStyle.Render("Juicy 批量检测器")) {
 				t.Fatalf("expected page title in view: %q", view)
 			}
-			if !strings.Contains(view, renderSectionHeader("供应商")) {
-				t.Fatalf("expected provider section header in view: %q", view)
+			if !strings.Contains(view, renderPaneTitle("供应商")) {
+				t.Fatalf("expected provider pane title in view: %q", view)
 			}
-			if !strings.Contains(view, renderSectionHeader("结果")) {
-				t.Fatalf("expected result section header in view: %q", view)
+			if !strings.Contains(view, renderPaneTitle("结果")) {
+				t.Fatalf("expected result pane title in view: %q", view)
 			}
 			if !strings.Contains(view, renderEmptyState("还没有保存任何供应商，按 'a' 新增。")) {
 				t.Fatalf("expected provider empty state in view: %q", view)
@@ -541,8 +541,8 @@ func TestFormViewShowsFieldGuidanceInBothLanguages(t *testing.T) {
 
 			view := m.formView()
 
-			if !strings.Contains(view, pageTitleStyle.Render(tc.title)) {
-				t.Fatalf("expected page title in form view: %q", view)
+			if !strings.Contains(view, renderPaneTitle(tc.title)) {
+				t.Fatalf("expected pane title in form view: %q", view)
 			}
 			if !strings.Contains(view, helperTextStyle.Render(tc.intro)) {
 				t.Fatalf("expected intro copy in form view: %q", view)
