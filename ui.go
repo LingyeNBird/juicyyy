@@ -159,7 +159,7 @@ func newPasswordInput(placeholder string) textinput.Model {
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	return tea.DisableMouse
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
