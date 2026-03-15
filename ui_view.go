@@ -37,6 +37,12 @@ type paneScrollbarMeta struct {
 	viewportOffset int
 }
 
+type formPaneLayout struct {
+	body            string
+	wrappedLines    []string
+	activeCursorRow int
+}
+
 func (m appModel) View() string {
 	if m.mode == addMode {
 		return m.formView()
@@ -51,10 +57,11 @@ func (m appModel) listView() string {
 		m.resultListView(),
 		m.listBottomContent(),
 		false,
+		0,
 	)
 }
 
-func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.Color, rightBody, bottomContent string, rightPaneScrollbar bool) string {
+func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.Color, rightBody, bottomContent string, rightPaneScrollbar bool, rightPaneViewportOffset int) string {
 	header := m.renderPageHeaderWithPrompt()
 	paneWidth := listPaneWidth(m.width)
 	bodyHeight := m.availableListBodyHeight(header, bottomContent)
@@ -66,11 +73,12 @@ func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.C
 	)
 	var rightPane string
 	if rightPaneScrollbar {
-		rightPane = renderTitledPaneWithHeightAndRightScrollbar(
+		rightPane = renderTitledPaneWithHeightAndRightScrollbarViewport(
 			rightTitle,
 			paneWidth,
 			bodyHeight,
 			rightBody,
+			rightPaneViewportOffset,
 			rightBorderColor,
 		)
 	} else {
@@ -113,24 +121,49 @@ func (m appModel) formView() string {
 		m.formPaneBody(),
 		m.formBottomContent(),
 		true,
+		m.formPaneScrollOffset,
 	)
 }
 
 func (m appModel) formPaneBody() string {
-	paneWidth := listPaneWidth(m.width)
+	return m.formPaneLayout().body
+}
+
+func (m appModel) formPaneSections(paneWidth int) []string {
 	applyFormLocale(&m.baseURLInput, &m.apiKeyInput, &m.modelsInput, m.lang, paneWidth)
 	syncModelsInputLayout(&m.modelsInput, paneWidth)
 
-	sections := []string{
+	return []string{
 		helperTextStyle.Render(m.formIntroText()),
-	}
-	sections = append(sections,
 		m.renderFormField(formFields[addProviderBaseURLField], m.baseURLInput.View()),
 		m.renderFormField(formFields[addProviderAPIKeyField], m.apiKeyInput.View()),
 		m.renderFormField(formFields[addProviderModelsField], m.modelsInput.View()),
-	)
+	}
+}
 
-	return strings.Join(sections, "\n\n")
+func (m appModel) formPaneLayout() formPaneLayout {
+	paneWidth := listPaneWidth(m.width)
+	contentWidth := paneContentWidth(paneWidth)
+	sections := m.formPaneSections(paneWidth)
+	wrappedLines := make([]string, 0)
+
+	for i, section := range sections {
+		if i > 0 {
+			wrappedLines = append(wrappedLines, "")
+		}
+		wrappedLines = append(wrappedLines, wrapPaneContentLines(contentWidth, section)...)
+	}
+
+	activeCursorRow := -1
+	if m.focusIndex >= addProviderBaseURLField && m.focusIndex < addProviderFieldCount && len(wrappedLines) > 0 {
+		activeCursorRow = maxInt(0, minInt(m.activeFormCursorRow(paneWidth), len(wrappedLines)-1))
+	}
+
+	return formPaneLayout{
+		body:            strings.Join(sections, "\n\n"),
+		wrappedLines:    wrappedLines,
+		activeCursorRow: activeCursorRow,
+	}
 }
 
 func (m appModel) formBottomContent() string {
@@ -326,35 +359,45 @@ func renderTitledPaneWithHeight(title string, width, height int, body string, bo
 }
 
 func renderTitledPaneWithHeightAndRightScrollbar(title string, width, height int, body string, borderColor ...lipgloss.Color) string {
+	return renderTitledPaneWithHeightAndRightScrollbarViewport(title, width, height, body, 0, borderColor...)
+}
+
+func renderTitledPaneWithHeightAndRightScrollbarViewport(title string, width, height int, body string, viewportOffset int, borderColor ...lipgloss.Color) string {
 	resolvedBorderColor := resolvePaneBorderColor(borderColor...)
 
 	if height <= 0 {
 		return renderTitledPane(title, width, body, resolvedBorderColor)
 	}
 
-	lines, scrollbar := layoutPaneBodyForHeight(width, height, body)
+	lines, scrollbar := layoutPaneBodyForHeightAndOffset(width, height, body, viewportOffset)
 	rendered := paneStyle.Copy().BorderForeground(resolvedBorderColor).Width(width).Render(strings.Join(lines, "\n"))
 	titledPane := renderTitledPaneFromRendered(title, rendered, resolvedBorderColor)
 	return rewriteRenderedPaneRightBorderWithScrollbar(titledPane, resolvedBorderColor, scrollbar)
 }
 
 func layoutPaneBodyForHeight(width, height int, body string) ([]string, paneScrollbarMeta) {
+	return layoutPaneBodyForHeightAndOffset(width, height, body, 0)
+}
+
+func layoutPaneBodyForHeightAndOffset(width, height int, body string, viewportOffset int) ([]string, paneScrollbarMeta) {
 	contentHeight := maxInt(0, height-paneVerticalChrome)
-	wrappedBody := wrapPaneBody(width, body)
-	wrappedLines := splitWrappedPaneLines(wrappedBody)
+	wrappedLines := wrapPaneContentLines(paneContentWidth(width), body)
 	visibleLines := minInt(len(wrappedLines), contentHeight)
+	maxOffset := maxInt(0, len(wrappedLines)-contentHeight)
+	viewportOffset = maxInt(0, minInt(viewportOffset, maxOffset))
 	layoutLines := append([]string(nil), wrappedLines...)
 
 	switch {
 	case len(layoutLines) > contentHeight:
-		layoutLines = layoutLines[:contentHeight]
+		layoutLines = layoutLines[viewportOffset:minInt(viewportOffset+contentHeight, len(layoutLines))]
 	case len(layoutLines) < contentHeight:
 		layoutLines = append(layoutLines, make([]string, contentHeight-len(layoutLines))...)
 	}
 
 	return layoutLines, paneScrollbarMeta{
-		totalLines:   len(wrappedLines),
-		visibleLines: visibleLines,
+		totalLines:     len(wrappedLines),
+		visibleLines:   visibleLines,
+		viewportOffset: viewportOffset,
 	}
 }
 
@@ -432,12 +475,19 @@ func resolvePaneBorderColor(borderColor ...lipgloss.Color) lipgloss.Color {
 }
 
 func wrapPaneBody(width int, body string) string {
+	return wrapPaneContent(paneContentWidth(width), body)
+}
+
+func wrapPaneContentLines(contentWidth int, body string) []string {
+	return splitWrappedPaneLines(wrapPaneContent(contentWidth, body))
+}
+
+func wrapPaneContent(contentWidth int, body string) string {
 	if body == "" {
 		return ""
 	}
 
-	contentWidth := maxInt(0, width-paneStyle.GetPaddingLeft()-paneStyle.GetPaddingRight())
-	if contentWidth == 0 {
+	if contentWidth <= 0 {
 		return body
 	}
 

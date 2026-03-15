@@ -61,27 +61,28 @@ const (
 )
 
 type appModel struct {
-	config        appConfig
-	configPath    string
-	lang          appLanguage
-	mode          viewMode
-	editingIndex  int
-	promptInput   textinput.Model
-	promptEditing bool
-	cursor        int
-	activeResult  int
-	baseURLInput  textinput.Model
-	apiKeyInput   textinput.Model
-	modelsInput   textarea.Model
-	focusIndex    int
-	width         int
-	height        int
-	status        string
-	statusKind    statusKind
-	results       []modelResult
-	running       bool
-	spinner       spinner.Model
-	concurrency   int
+	config               appConfig
+	configPath           string
+	lang                 appLanguage
+	mode                 viewMode
+	editingIndex         int
+	promptInput          textinput.Model
+	promptEditing        bool
+	cursor               int
+	activeResult         int
+	baseURLInput         textinput.Model
+	apiKeyInput          textinput.Model
+	modelsInput          textarea.Model
+	focusIndex           int
+	formPaneScrollOffset int
+	width                int
+	height               int
+	status               string
+	statusKind           statusKind
+	results              []modelResult
+	running              bool
+	spinner              spinner.Model
+	concurrency          int
 }
 
 func newModel(cfg appConfig, configPath string) appModel {
@@ -154,6 +155,10 @@ func (m appModel) activeFormPaneWidth() int {
 		return listPaneWidth(m.width)
 	}
 	return formPaneWidth(m.width)
+}
+
+func (m appModel) formPaneVisibleContentHeight() int {
+	return maxInt(0, m.availableListBodyHeight(m.renderPageHeaderWithPrompt(), m.formBottomContent())-paneVerticalChrome)
 }
 
 func (m appModel) isEditingProvider() bool {

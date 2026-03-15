@@ -12,3 +12,4 @@ _research/
 
 # Agent-generated files
 .sisyphus/*
+.research/*

@@ -195,6 +195,29 @@ func TestWindowSizeMsgUpdatesInputWidths(t *testing.T) {
 	}
 }
 
+func TestWindowSizeMsgReclampsFormPaneScrollToKeepCursorVisible(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 18
+	m.modelsInput.SetValue(strings.Join([]string{
+		"model-01", "model-02", "model-03", "model-04", "model-05", "model-06", "model-07", "model-08",
+	}, "\n"))
+	setFocusedFormField(&m, addProviderModelsField)
+	m.syncFormPaneScroll()
+
+	updated, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 14})
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.formPaneScrollOffset <= 0 {
+		t.Fatalf("expected resize to keep a positive form scroll offset, got %d", got.formPaneScrollOffset)
+	}
+	assertActiveFormCursorVisible(t, got)
+}
+
 func TestModelsInputUsesProviderLikePromptAndCompactHeight(t *testing.T) {
 	baseURLInput, apiKeyInput, modelsInput := newProviderInputs(langEN)
 
@@ -1706,6 +1729,24 @@ func TestRenderTitledPaneWithHeightAndRightScrollbarPreservesContentWidth(t *tes
 	}
 }
 
+func TestRenderTitledPaneWithHeightAndRightScrollbarViewportMovesThumbWithOffset(t *testing.T) {
+	width := 24
+	height := 8
+	body := strings.Join([]string{
+		"line-01", "line-02", "line-03", "line-04", "line-05", "line-06",
+		"line-07", "line-08", "line-09", "line-10", "line-11", "line-12",
+	}, "\n")
+	top := thumbRows(renderedLines(renderTitledPaneWithHeightAndRightScrollbarViewport("Add Provider", width, height, body, 0, addProviderPaneBorderColor)))
+	scrolled := thumbRows(renderedLines(renderTitledPaneWithHeightAndRightScrollbarViewport("Add Provider", width, height, body, 4, addProviderPaneBorderColor)))
+
+	if len(top) == 0 || len(scrolled) == 0 {
+		t.Fatal("expected scrollbar thumb rows for overflowing pane")
+	}
+	if scrolled[0] <= top[0] {
+		t.Fatalf("expected scrolled viewport thumb to move downward, got top=%v scrolled=%v", top, scrolled)
+	}
+}
+
 func TestRightBorderScrollbarStaysScopedToAddEditPane(t *testing.T) {
 	width := 24
 	height := 8
@@ -1747,6 +1788,97 @@ func TestFormViewRoutesScrollbarToAddPaneWhileListViewStaysPlain(t *testing.T) {
 	if !strings.Contains(formView, "▌") {
 		t.Fatalf("expected add/edit form view to render the right-border scrollbar, got %q", formView)
 	}
+}
+
+func TestEnterAddAndEditModeResetFormPaneScrollOffset(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", APIKey: "secret", Models: []string{"gpt-4o-mini", "qwen-max"}}}}, "juicy-providers.json")
+	m.width = 100
+	m.height = 16
+	m.formPaneScrollOffset = 5
+
+	updated, cmd := m.Update(keyRunes('a'))
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.mode != addMode {
+		t.Fatalf("expected add mode, got %v", got.mode)
+	}
+	if got.formPaneScrollOffset != 0 {
+		t.Fatalf("expected add mode to reset form pane scroll, got %d", got.formPaneScrollOffset)
+	}
+
+	got.mode = listMode
+	got.formPaneScrollOffset = 7
+	updated, cmd = got.Update(keyRunes('e'))
+	got = updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.mode != addMode {
+		t.Fatalf("expected edit mode to enter addMode view, got %v", got.mode)
+	}
+	if got.formPaneScrollOffset != 0 {
+		t.Fatalf("expected edit mode to reset form pane scroll, got %d", got.formPaneScrollOffset)
+	}
+}
+
+func TestModelsTypingScrollsFormPaneToKeepCursorVisible(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 14
+	setFocusedFormField(&m, addProviderModelsField)
+
+	for i := 1; i <= 8; i++ {
+		for _, r := range []rune(fmt.Sprintf("model-%02d", i)) {
+			updated, _ := m.Update(keyRunes(r))
+			m = updated.(appModel)
+		}
+		if i < 8 {
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			m = updated.(appModel)
+		}
+	}
+
+	if m.formPaneScrollOffset <= 0 {
+		t.Fatalf("expected models typing to scroll the form pane, got %d", m.formPaneScrollOffset)
+	}
+	assertActiveFormCursorVisible(t, m)
+	if !strings.Contains(stripANSI(m.formView()), "model-08") {
+		t.Fatalf("expected rendered form view to keep the active models content visible, got %q", m.formView())
+	}
+}
+
+func TestFocusChangeRepositionsFormPaneScrollForNewActiveField(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 14
+	m.modelsInput.SetValue(strings.Join([]string{
+		"model-01", "model-02", "model-03", "model-04", "model-05", "model-06", "model-07", "model-08",
+	}, "\n"))
+	setFocusedFormField(&m, addProviderModelsField)
+	m.syncFormPaneScroll()
+	if m.formPaneScrollOffset <= 0 {
+		t.Fatalf("expected models focus to start from a scrolled pane, got %d", m.formPaneScrollOffset)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.focusIndex != addProviderAPIKeyField {
+		t.Fatalf("expected focus to move to API key field, got %d", got.focusIndex)
+	}
+	if got.formPaneScrollOffset >= m.formPaneScrollOffset {
+		t.Fatalf("expected focus change to scroll upward for the new field, before=%d after=%d", m.formPaneScrollOffset, got.formPaneScrollOffset)
+	}
+	assertActiveFormCursorVisible(t, got)
 }
 
 func TestListViewKeepsResultsPaneAboveBottomBarAcrossViewportHeights(t *testing.T) {
@@ -2191,6 +2323,28 @@ func setFocusedFormField(m *appModel, index int) {
 	m.modelsInput.Blur()
 	m.focusIndex = index
 	m.focusCurrentInput()
+}
+
+func assertActiveFormCursorVisible(t *testing.T, m appModel) {
+	t.Helper()
+	layout := m.formPaneLayout()
+	visibleHeight := m.formPaneVisibleContentHeight()
+	if visibleHeight <= 0 {
+		t.Fatalf("expected positive visible form height, got %d", visibleHeight)
+	}
+	if layout.activeCursorRow < m.formPaneScrollOffset || layout.activeCursorRow >= m.formPaneScrollOffset+visibleHeight {
+		t.Fatalf("expected active cursor row %d inside [%d,%d)", layout.activeCursorRow, m.formPaneScrollOffset, m.formPaneScrollOffset+visibleHeight)
+	}
+}
+
+func thumbRows(lines []string) []int {
+	rows := make([]int, 0)
+	for i, line := range lines {
+		if lastRuneString(line) == "▌" {
+			rows = append(rows, i)
+		}
+	}
+	return rows
 }
 
 func listModeFooterText() string {

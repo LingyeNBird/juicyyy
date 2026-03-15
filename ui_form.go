@@ -84,10 +84,12 @@ func (m appModel) updateInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case addProviderBaseURLField:
 		var cmd tea.Cmd
 		m.baseURLInput, cmd = m.baseURLInput.Update(msg)
+		m.syncFormPaneScroll()
 		return m, cmd
 	case addProviderAPIKeyField:
 		var cmd tea.Cmd
 		m.apiKeyInput, cmd = m.apiKeyInput.Update(msg)
+		m.syncFormPaneScroll()
 		return m, cmd
 	case addProviderModelsField:
 		return m.updateModelsInput(msg)
@@ -106,6 +108,7 @@ func (m appModel) updateModelsInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if modelsInputNeedsViewportReset(m.modelsInput, oldHeight) {
 		m.modelsInput = rebuildModelsInput(m.modelsInput, paneWidth)
 	}
+	m.syncFormPaneScroll()
 
 	return m, cmd
 }
@@ -128,6 +131,78 @@ func modelsInputWrappedCursorRow(input textarea.Model) int {
 func modelsInputCursorColumn(input textarea.Model) int {
 	lineInfo := input.LineInfo()
 	return lineInfo.StartColumn + lineInfo.ColumnOffset
+}
+
+func (m appModel) formFieldInputCursorRow(fieldIndex, paneWidth int) int {
+	switch fieldIndex {
+	case addProviderBaseURLField, addProviderAPIKeyField:
+		return 0
+	case addProviderModelsField:
+		input := m.modelsInput
+		syncModelsInputLayout(&input, paneWidth)
+		return modelsInputWrappedCursorRow(input)
+	default:
+		return 0
+	}
+}
+
+func (m appModel) formFieldActiveCursorRow(fieldIndex, paneWidth int) int {
+	if fieldIndex < addProviderBaseURLField || fieldIndex >= addProviderFieldCount {
+		return 0
+	}
+
+	labelRows := len(wrapPaneContentLines(paneContentWidth(paneWidth), renderFieldLabel(formFields[fieldIndex].label.forLang(m.lang))))
+	return labelRows + m.formFieldInputCursorRow(fieldIndex, paneWidth)
+}
+
+func (m appModel) formFieldStartRow(fieldIndex, paneWidth int) int {
+	sectionIndex := fieldIndex + 1
+	sections := m.formPaneSections(paneWidth)
+	contentWidth := paneContentWidth(paneWidth)
+	startRow := 0
+
+	for i, section := range sections {
+		if i > 0 {
+			startRow++
+		}
+		if i == sectionIndex {
+			return startRow
+		}
+		startRow += len(wrapPaneContentLines(contentWidth, section))
+	}
+
+	return 0
+}
+
+func (m appModel) activeFormCursorRow(paneWidth int) int {
+	if m.focusIndex < addProviderBaseURLField || m.focusIndex >= addProviderFieldCount {
+		return 0
+	}
+	return m.formFieldStartRow(m.focusIndex, paneWidth) + m.formFieldActiveCursorRow(m.focusIndex, paneWidth)
+}
+
+func (m *appModel) syncFormPaneScroll() {
+	if m.mode != addMode {
+		m.formPaneScrollOffset = 0
+		return
+	}
+
+	layout := m.formPaneLayout()
+	visibleHeight := m.formPaneVisibleContentHeight()
+	if visibleHeight <= 0 {
+		m.formPaneScrollOffset = 0
+		return
+	}
+
+	maxOffset := maxInt(0, len(layout.wrappedLines)-visibleHeight)
+	offset := maxInt(0, minInt(m.formPaneScrollOffset, maxOffset))
+	if layout.activeCursorRow < offset {
+		offset = layout.activeCursorRow
+	}
+	if layout.activeCursorRow >= offset+visibleHeight {
+		offset = layout.activeCursorRow - visibleHeight + 1
+	}
+	m.formPaneScrollOffset = maxInt(0, minInt(offset, maxOffset))
 }
 
 func rebuildModelsInput(input textarea.Model, paneWidth int) textarea.Model {
@@ -167,6 +242,7 @@ func (m *appModel) resetForm() {
 	m.modelsInput.Blur()
 	m.editingIndex = noEditingProviderIndex
 	m.focusIndex = 0
+	m.formPaneScrollOffset = 0
 	m.applyPlaceholders()
 	m.baseURLInput.Focus()
 }
@@ -179,6 +255,7 @@ func (m *appModel) preloadForm(provider provider) {
 	m.modelsInput.SetValue(strings.Join(provider.Models, "\n"))
 	m.modelsInput.Blur()
 	m.focusIndex = addProviderBaseURLField
+	m.formPaneScrollOffset = 0
 	m.applyPlaceholders()
 	m.baseURLInput.Focus()
 }
@@ -197,6 +274,7 @@ func (m *appModel) cycleFocus(direction string) {
 		m.focusIndex = 0
 	}
 	m.focusCurrentInput()
+	m.syncFormPaneScroll()
 }
 
 func (m *appModel) blurFocusedInput() {
