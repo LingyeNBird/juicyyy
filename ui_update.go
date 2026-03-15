@@ -111,30 +111,33 @@ func (m appModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.cycleFocus(msg.String())
 		return m, nil
+	case "ctrl+s":
+		return m.submitProviderForm()
 	case "enter":
-		if m.focusIndex == addProviderModelsField {
-			return m.updateInputs(msg)
-		}
-		provider, err := m.buildProviderFromInputs()
-		if err != nil {
-			m.setStatus(statusError, err.Error())
-			return m, nil
-		}
-		savedIndex, err := m.saveProvider(provider)
-		if err != nil {
-			m.setStatus(statusError, m.formSaveFailureStatus(err))
-			return m, nil
-		}
-		successStatus := m.formSaveSuccessStatus(provider)
-
-		m.mode = listMode
-		m.cursor = savedIndex
-		m.resetForm()
-		m.setStatus(statusSuccess, successStatus)
-		return m, nil
+		return m.updateInputs(msg)
 	}
 
 	return m.updateInputs(msg)
+}
+
+func (m appModel) submitProviderForm() (tea.Model, tea.Cmd) {
+	provider, err := m.buildProviderFromInputs()
+	if err != nil {
+		m.setStatus(statusError, err.Error())
+		return m, nil
+	}
+	savedIndex, err := m.saveProvider(provider)
+	if err != nil {
+		m.setStatus(statusError, m.formSaveFailureStatus(err))
+		return m, nil
+	}
+	successStatus := m.formSaveSuccessStatus(provider)
+
+	m.mode = listMode
+	m.cursor = savedIndex
+	m.resetForm()
+	m.setStatus(statusSuccess, successStatus)
+	return m, nil
 }
 
 func (m appModel) handlePromptKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -171,7 +174,7 @@ func (m *appModel) enterAddMode() {
 	m.blurPromptInput()
 	m.mode = addMode
 	m.resetForm()
-	m.setStatus(statusInfo, m.tr("新增供应商：模型支持逗号或换行；在基础 URL 或 API 密钥上按回车保存，Esc 取消。", "Add a provider. Models accept commas or new lines; press Enter on Base URL or API Key to save, or Esc to cancel."))
+	m.setStatus(statusInfo, m.tr("新增供应商：模型支持逗号或换行；按 Ctrl+S 保存，Esc 取消。", "Add a provider. Models accept commas or new lines; press Ctrl+S to save, or Esc to cancel."))
 }
 
 func (m *appModel) enterEditMode(index int) {
@@ -184,7 +187,7 @@ func (m *appModel) enterEditMode(index int) {
 	m.mode = addMode
 	m.editingIndex = index
 	m.preloadForm(m.config.Providers[index])
-	m.setStatus(statusInfo, m.tr("编辑供应商：修改基础 URL、API 密钥和模型；在基础 URL 或 API 密钥上按回车更新，Esc 取消。", "Edit the selected provider. Update the base URL, API key, and models; press Enter on Base URL or API Key to save, or Esc to cancel."))
+	m.setStatus(statusInfo, m.tr("编辑供应商：修改基础 URL、API 密钥和模型；按 Ctrl+S 更新，Esc 取消。", "Edit the selected provider. Update the base URL, API key, and models; press Ctrl+S to update, or Esc to cancel."))
 }
 
 func (m *appModel) cancelFormMode() {

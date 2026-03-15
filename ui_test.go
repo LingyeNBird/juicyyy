@@ -606,7 +606,7 @@ func TestModelAddProviderSaveFailureRollsBackProviderAppend(t *testing.T) {
 	m.apiKeyInput.SetValue("secret")
 	m.modelsInput.SetValue("gpt-4o-mini")
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	got := updated.(appModel)
 
 	if cmd != nil {
@@ -624,6 +624,52 @@ func TestModelAddProviderSaveFailureRollsBackProviderAppend(t *testing.T) {
 	if got.statusKind != statusError {
 		t.Fatalf("expected error status kind, got %v", got.statusKind)
 	}
+}
+
+func TestModelAddAndEditEntryStatusMentionsCtrlS(t *testing.T) {
+	t.Run("add", func(t *testing.T) {
+		m := newModel(appConfig{}, "juicy-providers.json")
+
+		updated, cmd := m.Update(keyRunes('a'))
+		got := updated.(appModel)
+
+		if cmd != nil {
+			t.Fatal("expected no command")
+		}
+		if got.mode != addMode {
+			t.Fatalf("expected add mode, got %v", got.mode)
+		}
+		if got.status != "新增供应商：模型支持逗号或换行；按 Ctrl+S 保存，Esc 取消。" {
+			t.Fatalf("unexpected add status: %q", got.status)
+		}
+		if got.statusKind != statusInfo {
+			t.Fatalf("expected info status kind, got %v", got.statusKind)
+		}
+	})
+
+	t.Run("edit", func(t *testing.T) {
+		m := newModel(appConfig{Providers: []provider{{
+			BaseURL: "https://example.com/v1",
+			APIKey:  "secret",
+			Models:  []string{"gpt-4o-mini"},
+		}}}, "juicy-providers.json")
+
+		updated, cmd := m.Update(keyRunes('e'))
+		got := updated.(appModel)
+
+		if cmd != nil {
+			t.Fatal("expected no command")
+		}
+		if got.mode != addMode {
+			t.Fatalf("expected shared form mode, got %v", got.mode)
+		}
+		if got.status != "编辑供应商：修改基础 URL、API 密钥和模型；按 Ctrl+S 更新，Esc 取消。" {
+			t.Fatalf("unexpected edit status: %q", got.status)
+		}
+		if got.statusKind != statusInfo {
+			t.Fatalf("expected info status kind, got %v", got.statusKind)
+		}
+	})
 }
 
 func TestModelEditProviderWithNoProvidersShowsWarningAndStaysInListMode(t *testing.T) {
@@ -728,7 +774,7 @@ func TestModelEditSaveUpdatesProviderInPlace(t *testing.T) {
 	got.modelsInput.SetValue("qwen-max\nclaude-3.5-sonnet")
 	setFocusedFormField(&got, addProviderAPIKeyField)
 
-	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	saved := updated.(appModel)
 
 	if cmd != nil {
@@ -771,6 +817,81 @@ func TestModelEditSaveUpdatesProviderInPlace(t *testing.T) {
 	}
 }
 
+func TestModelEnterOnBaseURLOrAPIKeyDoesNotUpdateProviderInEditMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		focusIndex int
+	}{
+		{name: "base-url", focusIndex: addProviderBaseURLField},
+		{name: "api-key", focusIndex: addProviderAPIKeyField},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "providers.json")
+			initial := appConfig{Providers: []provider{{
+				BaseURL: "https://one.example.com/v1",
+				APIKey:  "first-secret",
+				Models:  []string{"gpt-4o-mini"},
+			}, {
+				BaseURL: "https://two.example.com/v1",
+				APIKey:  "second-secret",
+				Models:  []string{"qwen-max"},
+			}}}
+			if err := saveConfig(configPath, initial); err != nil {
+				t.Fatalf("seed config: %v", err)
+			}
+
+			m := newModel(initial, configPath)
+			m.cursor = 1
+
+			updated, _ := m.Update(keyRunes('e'))
+			got := updated.(appModel)
+			got.baseURLInput.SetValue("https://updated.example.com/v1")
+			got.apiKeyInput.SetValue("updated-secret")
+			got.modelsInput.SetValue("qwen-max\nclaude-3.5-sonnet")
+			setFocusedFormField(&got, tc.focusIndex)
+
+			updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			unchanged := updated.(appModel)
+
+			if unchanged.mode != addMode {
+				t.Fatalf("expected to remain in shared form mode, got %v", unchanged.mode)
+			}
+			if unchanged.editingIndex != 1 {
+				t.Fatalf("expected editing index preserved, got %d", unchanged.editingIndex)
+			}
+			if unchanged.config.Providers[1].BaseURL != initial.Providers[1].BaseURL {
+				t.Fatalf("expected provider Base URL unchanged, got %q", unchanged.config.Providers[1].BaseURL)
+			}
+			if unchanged.config.Providers[1].APIKey != initial.Providers[1].APIKey {
+				t.Fatalf("expected provider API key unchanged, got %q", unchanged.config.Providers[1].APIKey)
+			}
+			if len(unchanged.config.Providers[1].Models) != len(initial.Providers[1].Models) || unchanged.config.Providers[1].Models[0] != initial.Providers[1].Models[0] {
+				t.Fatalf("expected provider models unchanged, got %#v", unchanged.config.Providers[1].Models)
+			}
+			if unchanged.baseURLInput.Value() != "https://updated.example.com/v1" {
+				t.Fatalf("expected edited Base URL to remain in form, got %q", unchanged.baseURLInput.Value())
+			}
+			if unchanged.apiKeyInput.Value() != "updated-secret" {
+				t.Fatalf("expected edited API key to remain in form, got %q", unchanged.apiKeyInput.Value())
+			}
+			if unchanged.modelsInput.Value() != "qwen-max\nclaude-3.5-sonnet" {
+				t.Fatalf("expected edited models to remain in form, got %q", unchanged.modelsInput.Value())
+			}
+
+			loaded, err := loadConfig(configPath)
+			if err != nil {
+				t.Fatalf("load saved config: %v", err)
+			}
+			if loaded.Providers[1].BaseURL != initial.Providers[1].BaseURL {
+				t.Fatalf("expected persisted Base URL unchanged, got %q", loaded.Providers[1].BaseURL)
+			}
+			if loaded.Providers[1].APIKey != initial.Providers[1].APIKey {
+				t.Fatalf("expected persisted API key unchanged, got %q", loaded.Providers[1].APIKey)
+			}
+		})
+	}
+}
+
 func TestModelEditSavePreservesCursorSelection(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "providers.json")
 	initial := appConfig{Providers: []provider{{
@@ -795,7 +916,7 @@ func TestModelEditSavePreservesCursorSelection(t *testing.T) {
 	got.modelsInput.SetValue("qwen-max\nclaude-3.5-sonnet")
 	setFocusedFormField(&got, addProviderAPIKeyField)
 
-	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = got.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	saved := updated.(appModel)
 
 	if saved.cursor != 1 {
@@ -823,7 +944,7 @@ func TestModelEditSaveFailureRollsBackAndStaysInFormMode(t *testing.T) {
 	got.modelsInput.SetValue("qwen-max")
 	setFocusedFormField(&got, addProviderAPIKeyField)
 
-	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := got.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	failed := updated.(appModel)
 
 	if cmd != nil {
@@ -1056,6 +1177,48 @@ func TestModelEnterInModelsTextareaAddsNewlineWithoutSaving(t *testing.T) {
 	}
 }
 
+func TestModelEnterOnBaseURLOrAPIKeyDoesNotSaveProviderInAddMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		focusIndex int
+	}{
+		{name: "base-url", focusIndex: addProviderBaseURLField},
+		{name: "api-key", focusIndex: addProviderAPIKeyField},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "providers.json")
+			m := newModel(appConfig{}, configPath)
+			m.mode = addMode
+			m.baseURLInput.SetValue("https://example.com/v1")
+			m.apiKeyInput.SetValue("secret")
+			m.modelsInput.SetValue("gpt-4o-mini")
+			setFocusedFormField(&m, tc.focusIndex)
+
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			got := updated.(appModel)
+
+			if got.mode != addMode {
+				t.Fatalf("expected to remain in add mode, got %v", got.mode)
+			}
+			if got.editingIndex != noEditingProviderIndex {
+				t.Fatalf("expected add context to stay active, got editing index %d", got.editingIndex)
+			}
+			if len(got.config.Providers) != 0 {
+				t.Fatalf("expected no provider save, got %d providers", len(got.config.Providers))
+			}
+			if got.baseURLInput.Value() != "https://example.com/v1" {
+				t.Fatalf("unexpected Base URL value after enter: %q", got.baseURLInput.Value())
+			}
+			if got.apiKeyInput.Value() != "secret" {
+				t.Fatalf("unexpected API key value after enter: %q", got.apiKeyInput.Value())
+			}
+			if got.modelsInput.Value() != "gpt-4o-mini" {
+				t.Fatalf("unexpected models value after enter: %q", got.modelsInput.Value())
+			}
+		})
+	}
+}
+
 func TestModelTypingLowercaseLInAddModeDoesNotToggleLanguage(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 	m.mode = addMode
@@ -1141,7 +1304,7 @@ func TestModelEscCancelsFromEveryFocusedField(t *testing.T) {
 	}
 }
 
-func TestModelEnterOnAPIKeySavesProviderWithMultilineModels(t *testing.T) {
+func TestModelCtrlSSavesProviderWithMultilineModels(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "providers.json")
 	m := newModel(appConfig{}, configPath)
 	m.mode = addMode
@@ -1150,7 +1313,7 @@ func TestModelEnterOnAPIKeySavesProviderWithMultilineModels(t *testing.T) {
 	m.modelsInput.SetValue("gpt-4o-mini\nqwen-max, claude-3.5-sonnet\nqwen-max")
 	setFocusedFormField(&m, addProviderAPIKeyField)
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	got := updated.(appModel)
 
 	if cmd != nil {
@@ -1192,7 +1355,7 @@ func TestModelRejectsInvalidURLAndEmptyModels(t *testing.T) {
 		m.baseURLInput.SetValue("example.com")
 		m.modelsInput.SetValue("gpt-4o-mini")
 
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 		got := updated.(appModel)
 
 		if got.mode != addMode {
@@ -1211,7 +1374,7 @@ func TestModelRejectsInvalidURLAndEmptyModels(t *testing.T) {
 		m.mode = addMode
 		m.baseURLInput.SetValue("https://example.com/v1")
 
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 		got := updated.(appModel)
 
 		if got.mode != addMode {
@@ -1235,7 +1398,7 @@ func TestModelSavesProviderAndMovesCursor(t *testing.T) {
 	m.apiKeyInput.SetValue("secret")
 	m.modelsInput.SetValue("gpt-4o-mini, qwen-max")
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	got := updated.(appModel)
 
 	if cmd != nil {
@@ -1580,7 +1743,7 @@ func TestFormViewShowsFieldGuidanceInBothLanguages(t *testing.T) {
 				"请填写 OAI 兼容 base URL、API",
 				"key，以及支持逗号或换行的模型列表。",
 			},
-			keys: "快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英",
+			keys: "快捷键：tab/shift+tab 切换焦点 | Ctrl+S 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英",
 		},
 		{
 			name:  "zh-wide",
@@ -1592,7 +1755,7 @@ func TestFormViewShowsFieldGuidanceInBothLanguages(t *testing.T) {
 				"请填写 OAI 兼容 base URL、API",
 				"key，以及支持逗号或换行的模型列表。",
 			},
-			keys: "快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英",
+			keys: "快捷键：tab/shift+tab 切换焦点 | Ctrl+S 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英",
 		},
 		{
 			name:  "en-narrow",
@@ -1605,7 +1768,7 @@ func TestFormViewShowsFieldGuidanceInBothLanguages(t *testing.T) {
 				"API key, and models separated",
 				"commas or new lines.",
 			},
-			keys: "Keys: tab/shift+tab move | enter saves on Base URL/API Key | enter adds a new line in Models | esc cancel | ctrl+l toggle lang",
+			keys: "Keys: tab/shift+tab move | ctrl+s save | enter adds a new line in Models | esc cancel | ctrl+l toggle lang",
 		},
 		{
 			name:  "en-wide",
@@ -1618,7 +1781,7 @@ func TestFormViewShowsFieldGuidanceInBothLanguages(t *testing.T) {
 				"API key, and models separated",
 				"commas or new lines.",
 			},
-			keys: "Keys: tab/shift+tab move | enter saves on Base URL/API Key | enter adds a new line in Models | esc cancel | ctrl+l toggle lang",
+			keys: "Keys: tab/shift+tab move | ctrl+s save | enter adds a new line in Models | esc cancel | ctrl+l toggle lang",
 		},
 	}
 
@@ -1852,9 +2015,9 @@ func listModeFooterText() string {
 }
 
 func addModeFooterText() string {
-	return "快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英"
+	return "快捷键：tab/shift+tab 切换焦点 | Ctrl+S 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英"
 }
 
 func editModeFooterText() string {
-	return "快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 更新 | 模型框 Enter 换行 | Esc 取消编辑 | Ctrl+L 切换中英"
+	return "快捷键：tab/shift+tab 切换焦点 | Ctrl+S 更新 | 模型框 Enter 换行 | Esc 取消编辑 | Ctrl+L 切换中英"
 }

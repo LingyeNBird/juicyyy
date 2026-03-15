@@ -135,9 +135,9 @@ func (m appModel) formIntroText() string {
 
 func (m appModel) formFooterText() string {
 	if m.isEditingProvider() {
-		return m.tr("快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 更新 | 模型框 Enter 换行 | Esc 取消编辑 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | enter updates on Base URL/API Key | enter adds a new line in Models | esc cancel edit | ctrl+l toggle lang")
+		return m.tr("快捷键：tab/shift+tab 切换焦点 | Ctrl+S 更新 | 模型框 Enter 换行 | Esc 取消编辑 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | ctrl+s update | enter adds a new line in Models | esc cancel edit | ctrl+l toggle lang")
 	}
-	return m.tr("快捷键：tab/shift+tab 切换焦点 | 在基础 URL/API 密钥上按 Enter 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | enter saves on Base URL/API Key | enter adds a new line in Models | esc cancel | ctrl+l toggle lang")
+	return m.tr("快捷键：tab/shift+tab 切换焦点 | Ctrl+S 保存 | 模型框 Enter 换行 | Esc 取消 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | ctrl+s save | enter adds a new line in Models | esc cancel | ctrl+l toggle lang")
 }
 
 func (m appModel) renderViewWithBottomBar(mainContent, bottomContent string) string {
