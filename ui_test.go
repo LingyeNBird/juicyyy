@@ -1328,6 +1328,137 @@ func TestModelTextareaSupportsTypingAndArrowNavigationWithinField(t *testing.T) 
 	}
 }
 
+func TestAPIKeyDownMovesFocusToModelsFirstRow(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 14
+	m.modelsInput.SetValue("model-01\nmodel-02\nmodel-03")
+	m.moveModelsCursorToLastRow()
+	setFocusedFormField(&m, addProviderAPIKeyField)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.focusIndex != addProviderModelsField {
+		t.Fatalf("expected models field focus, got %d", got.focusIndex)
+	}
+	if !modelsInputIsFirstRow(got.modelsInput) {
+		t.Fatalf("expected models cursor to land on the first row, line=%d rowOffset=%d", got.modelsInput.Line(), got.modelsInput.LineInfo().RowOffset)
+	}
+	if gotRow := modelsInputWrappedCursorRow(got.modelsInput); gotRow != 0 {
+		t.Fatalf("expected wrapped cursor row 0, got %d", gotRow)
+	}
+}
+
+func TestModelsFirstRowUpMovesFocusToAPIKeyAndRevealsLabel(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 14
+	m.modelsInput.SetValue(strings.Join([]string{
+		"model-01", "model-02", "model-03", "model-04", "model-05", "model-06", "model-07", "model-08",
+	}, "\n"))
+	setFocusedFormField(&m, addProviderModelsField)
+	m.moveModelsCursorToFirstRow()
+	m.formPaneScrollOffset = maxFormPaneScrollOffset(m)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.focusIndex != addProviderAPIKeyField {
+		t.Fatalf("expected API key field focus, got %d", got.focusIndex)
+	}
+	assertFormFieldStartVisible(t, got, addProviderAPIKeyField)
+	if got.formPaneScrollOffset >= m.formPaneScrollOffset {
+		t.Fatalf("expected upward transition to reduce scroll offset, before=%d after=%d", m.formPaneScrollOffset, got.formPaneScrollOffset)
+	}
+}
+
+func TestModelsLastRowDownMovesFocusToBaseURL(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 14
+	m.modelsInput.SetValue(strings.Join([]string{
+		"model-01", "model-02", "model-03", "model-04", "model-05", "model-06", "model-07", "model-08",
+	}, "\n"))
+	setFocusedFormField(&m, addProviderModelsField)
+	m.moveModelsCursorToLastRow()
+	m.formPaneScrollOffset = maxFormPaneScrollOffset(m)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.focusIndex != addProviderBaseURLField {
+		t.Fatalf("expected Base URL field focus, got %d", got.focusIndex)
+	}
+	if got.formPaneScrollOffset != 0 {
+		t.Fatalf("expected downward wrap to reset the pane to the top, got %d", got.formPaneScrollOffset)
+	}
+}
+
+func TestBaseURLUpMovesFocusToModelsLastRow(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 14
+	m.modelsInput.SetValue(strings.Join([]string{
+		"model-01", "model-02", "model-03", "model-04", "model-05", "model-06", "model-07", "model-08",
+	}, "\n"))
+	setFocusedFormField(&m, addProviderBaseURLField)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.focusIndex != addProviderModelsField {
+		t.Fatalf("expected models field focus, got %d", got.focusIndex)
+	}
+	if !modelsInputIsLastRow(got.modelsInput) {
+		t.Fatalf("expected models cursor to land on the last row, wrapped row=%d", modelsInputWrappedCursorRow(got.modelsInput))
+	}
+	if got.formPaneScrollOffset != maxFormPaneScrollOffset(got) {
+		t.Fatalf("expected upward wrap to scroll the pane to the bottom, got %d want %d", got.formPaneScrollOffset, maxFormPaneScrollOffset(got))
+	}
+}
+
+func TestAPIKeyUpMovesFocusToBaseURLAndResetsPaneToTop(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 14
+	m.modelsInput.SetValue(strings.Join([]string{
+		"model-01", "model-02", "model-03", "model-04", "model-05", "model-06", "model-07", "model-08",
+	}, "\n"))
+	setFocusedFormField(&m, addProviderAPIKeyField)
+	m.formPaneScrollOffset = maxFormPaneScrollOffset(m)
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.focusIndex != addProviderBaseURLField {
+		t.Fatalf("expected Base URL field focus, got %d", got.focusIndex)
+	}
+	if got.formPaneScrollOffset != 0 {
+		t.Fatalf("expected upward transition to reset the pane to the top, got %d", got.formPaneScrollOffset)
+	}
+}
+
 func TestModelEscCancelsFromEveryFocusedField(t *testing.T) {
 	for _, focusIndex := range []int{addProviderBaseURLField, addProviderAPIKeyField, addProviderModelsField} {
 		t.Run(fmt.Sprintf("focus-%d", focusIndex), func(t *testing.T) {
@@ -1852,6 +1983,87 @@ func TestModelsTypingScrollsFormPaneToKeepCursorVisible(t *testing.T) {
 	}
 }
 
+func TestModelsDownNavigationStartsScrollingAtThirdVisibleRowFromBottom(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 16
+	m.modelsInput.SetValue(strings.Join([]string{
+		"model-01", "model-02", "model-03", "model-04", "model-05", "model-06", "model-07", "model-08", "model-09", "model-10",
+		"model-11", "model-12", "model-13", "model-14", "model-15", "model-16", "model-17", "model-18", "model-19", "model-20",
+	}, "\n"))
+	setFocusedFormField(&m, addProviderModelsField)
+	syncModelsInputLayout(&m.modelsInput, listPaneWidth(m.width))
+	restoreModelsInputCursor(&m.modelsInput, 8, len([]rune("model-09")))
+
+	visibleHeight := m.formPaneVisibleContentHeight()
+	thresholdRow := visibleHeight - 3
+	if thresholdRow < 0 {
+		t.Fatalf("expected non-negative threshold row, got %d", thresholdRow)
+	}
+	layout := m.formPaneLayout()
+	m.formPaneScrollOffset = layout.activeCursorRow - thresholdRow
+	if m.formPaneScrollOffset <= 0 {
+		t.Fatalf("expected positive pre-scroll offset, got %d", m.formPaneScrollOffset)
+	}
+	if maxOffset := maxFormPaneScrollOffset(m); m.formPaneScrollOffset >= maxOffset {
+		t.Fatalf("expected pre-scroll offset below max %d, got %d", maxOffset, m.formPaneScrollOffset)
+	}
+	if got := activeFormCursorViewportRow(m); got != thresholdRow {
+		t.Fatalf("expected pre-step cursor row %d, got %d", thresholdRow, got)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	got := updated.(appModel)
+
+	if cmd == nil {
+		t.Fatal("expected textarea navigation command")
+	}
+	if got.formPaneScrollOffset != m.formPaneScrollOffset+1 {
+		t.Fatalf("expected downward threshold scroll to advance offset to %d, got %d", m.formPaneScrollOffset+1, got.formPaneScrollOffset)
+	}
+	if gotRow := activeFormCursorViewportRow(got); gotRow != thresholdRow {
+		t.Fatalf("expected active cursor to stay on threshold row %d, got %d", thresholdRow, gotRow)
+	}
+}
+
+func TestModelsUpNavigationStartsScrollingAtThirdVisibleRowFromTop(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = addMode
+	m.width = 100
+	m.height = 16
+	m.modelsInput.SetValue(strings.Join([]string{
+		"model-01", "model-02", "model-03", "model-04", "model-05", "model-06", "model-07", "model-08", "model-09", "model-10",
+		"model-11", "model-12", "model-13", "model-14", "model-15", "model-16", "model-17", "model-18", "model-19", "model-20",
+	}, "\n"))
+	setFocusedFormField(&m, addProviderModelsField)
+	syncModelsInputLayout(&m.modelsInput, listPaneWidth(m.width))
+	restoreModelsInputCursor(&m.modelsInput, 8, len([]rune("model-09")))
+
+	thresholdRow := 2
+	layout := m.formPaneLayout()
+	m.formPaneScrollOffset = layout.activeCursorRow - thresholdRow
+	if m.formPaneScrollOffset <= 0 {
+		t.Fatalf("expected positive pre-scroll offset, got %d", m.formPaneScrollOffset)
+	}
+	if got := activeFormCursorViewportRow(m); got != thresholdRow {
+		t.Fatalf("expected pre-step cursor row %d, got %d", thresholdRow, got)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	got := updated.(appModel)
+
+	if cmd == nil {
+		t.Fatal("expected textarea navigation command")
+	}
+	if got.formPaneScrollOffset != m.formPaneScrollOffset-1 {
+		t.Fatalf("expected upward threshold scroll to reduce offset to %d, got %d", m.formPaneScrollOffset-1, got.formPaneScrollOffset)
+	}
+	if gotRow := activeFormCursorViewportRow(got); gotRow != thresholdRow {
+		t.Fatalf("expected active cursor to stay on threshold row %d, got %d", thresholdRow, gotRow)
+	}
+}
+
 func TestFocusChangeRepositionsFormPaneScrollForNewActiveField(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 	m.mode = addMode
@@ -2335,6 +2547,27 @@ func assertActiveFormCursorVisible(t *testing.T, m appModel) {
 	if layout.activeCursorRow < m.formPaneScrollOffset || layout.activeCursorRow >= m.formPaneScrollOffset+visibleHeight {
 		t.Fatalf("expected active cursor row %d inside [%d,%d)", layout.activeCursorRow, m.formPaneScrollOffset, m.formPaneScrollOffset+visibleHeight)
 	}
+}
+
+func assertFormFieldStartVisible(t *testing.T, m appModel, fieldIndex int) {
+	t.Helper()
+	visibleHeight := m.formPaneVisibleContentHeight()
+	if visibleHeight <= 0 {
+		t.Fatalf("expected positive visible form height, got %d", visibleHeight)
+	}
+	fieldStart := m.formFieldStartRow(fieldIndex, listPaneWidth(m.width))
+	if fieldStart < m.formPaneScrollOffset || fieldStart >= m.formPaneScrollOffset+visibleHeight {
+		t.Fatalf("expected field %d start row %d inside [%d,%d)", fieldIndex, fieldStart, m.formPaneScrollOffset, m.formPaneScrollOffset+visibleHeight)
+	}
+}
+
+func activeFormCursorViewportRow(m appModel) int {
+	return m.formPaneLayout().activeCursorRow - m.formPaneScrollOffset
+}
+
+func maxFormPaneScrollOffset(m appModel) int {
+	layout := m.formPaneLayout()
+	return maxInt(0, len(layout.wrappedLines)-m.formPaneVisibleContentHeight())
 }
 
 func thumbRows(lines []string) []int {

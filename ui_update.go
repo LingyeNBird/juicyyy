@@ -106,10 +106,9 @@ func (m appModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.cancelFormMode()
 		return m, nil
-	case "tab", "shift+tab", "up", "down":
-		if m.focusIndex == addProviderModelsField && (msg.String() == "up" || msg.String() == "down") {
-			return m.updateInputs(msg)
-		}
+	case "up", "down":
+		return m.handleVerticalFormNavigation(msg)
+	case "tab", "shift+tab":
 		m.cycleFocus(msg.String())
 		return m, nil
 	case "ctrl+s":

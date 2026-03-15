@@ -9,6 +9,16 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+type formScrollDirection int
+
+const (
+	formScrollDirectionNeutral formScrollDirection = iota
+	formScrollDirectionUp
+	formScrollDirectionDown
+)
+
+const formScrollLeadRows = 2
+
 func newProviderInputs(lang appLanguage) (textinput.Model, textinput.Model, textarea.Model) {
 	baseURLInput := newInput(inputKindText)
 	apiKeyInput := newInput(inputKindPassword)
@@ -100,6 +110,10 @@ func (m appModel) updateInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m appModel) updateModelsInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	paneWidth := m.activeFormPaneWidth()
 	oldHeight := m.modelsInput.Height()
+	scrollDirection := formScrollDirectionNeutral
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		scrollDirection = formScrollDirectionForKey(keyMsg.String())
+	}
 
 	var cmd tea.Cmd
 	m.modelsInput, cmd = m.modelsInput.Update(msg)
@@ -108,7 +122,7 @@ func (m appModel) updateModelsInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if modelsInputNeedsViewportReset(m.modelsInput, oldHeight) {
 		m.modelsInput = rebuildModelsInput(m.modelsInput, paneWidth)
 	}
-	m.syncFormPaneScroll()
+	m.syncFormPaneScrollWithDirection(scrollDirection)
 
 	return m, cmd
 }
@@ -131,6 +145,27 @@ func modelsInputWrappedCursorRow(input textarea.Model) int {
 func modelsInputCursorColumn(input textarea.Model) int {
 	lineInfo := input.LineInfo()
 	return lineInfo.StartColumn + lineInfo.ColumnOffset
+}
+
+func modelsInputIsFirstRow(input textarea.Model) bool {
+	return input.Line() == 0 && input.LineInfo().RowOffset == 0
+}
+
+func modelsInputIsLastRow(input textarea.Model) bool {
+	return modelsInputWrappedCursorRow(input) >= maxInt(0, wrappedVisibleRowCount(input.Value(), input.Width())-1)
+}
+
+func moveModelsInputCursorToFirstRow(input *textarea.Model, paneWidth int) {
+	syncModelsInputLayout(input, paneWidth)
+	restoreModelsInputCursor(input, 0, 0)
+}
+
+func moveModelsInputCursorToLastRow(input *textarea.Model, paneWidth int) {
+	syncModelsInputLayout(input, paneWidth)
+	lines := strings.Split(input.Value(), "\n")
+	lastLine := maxInt(0, len(lines)-1)
+	lastCol := len([]rune(lines[lastLine]))
+	restoreModelsInputCursor(input, lastLine, lastCol)
 }
 
 func (m appModel) formFieldInputCursorRow(fieldIndex, paneWidth int) int {
@@ -182,6 +217,10 @@ func (m appModel) activeFormCursorRow(paneWidth int) int {
 }
 
 func (m *appModel) syncFormPaneScroll() {
+	m.syncFormPaneScrollWithDirection(formScrollDirectionNeutral)
+}
+
+func (m *appModel) syncFormPaneScrollWithDirection(direction formScrollDirection) {
 	if m.mode != addMode {
 		m.formPaneScrollOffset = 0
 		return
@@ -196,13 +235,137 @@ func (m *appModel) syncFormPaneScroll() {
 
 	maxOffset := maxInt(0, len(layout.wrappedLines)-visibleHeight)
 	offset := maxInt(0, minInt(m.formPaneScrollOffset, maxOffset))
-	if layout.activeCursorRow < offset {
-		offset = layout.activeCursorRow
+	if layout.activeCursorRow < 0 {
+		m.formPaneScrollOffset = offset
+		return
 	}
-	if layout.activeCursorRow >= offset+visibleHeight {
-		offset = layout.activeCursorRow - visibleHeight + 1
+
+	activeCursorRow := maxInt(0, minInt(layout.activeCursorRow, len(layout.wrappedLines)-1))
+	anchorRow := maxInt(0, minInt(m.formScrollAnchorRow(listPaneWidth(m.width), direction), len(layout.wrappedLines)-1))
+	margin := formScrollMargin(visibleHeight)
+
+	switch direction {
+	case formScrollDirectionUp:
+		topThreshold := offset + margin
+		if anchorRow < topThreshold {
+			offset = anchorRow - margin
+		}
+	case formScrollDirectionDown:
+		bottomThreshold := offset + visibleHeight - 1 - margin
+		if activeCursorRow > bottomThreshold {
+			offset = activeCursorRow - (visibleHeight - 1 - margin)
+		}
+	}
+
+	if direction == formScrollDirectionUp && anchorRow < offset {
+		offset = anchorRow
+	}
+	if activeCursorRow < offset {
+		offset = activeCursorRow
+	}
+	if activeCursorRow >= offset+visibleHeight {
+		offset = activeCursorRow - visibleHeight + 1
 	}
 	m.formPaneScrollOffset = maxInt(0, minInt(offset, maxOffset))
+}
+
+func formScrollMargin(visibleHeight int) int {
+	if visibleHeight <= formScrollLeadRows*2+1 {
+		return 0
+	}
+	return formScrollLeadRows
+}
+
+func formScrollDirectionForKey(key string) formScrollDirection {
+	switch key {
+	case "up", "shift+tab":
+		return formScrollDirectionUp
+	case "down", "tab":
+		return formScrollDirectionDown
+	default:
+		return formScrollDirectionNeutral
+	}
+}
+
+func (m appModel) formScrollAnchorRow(paneWidth int, direction formScrollDirection) int {
+	if direction != formScrollDirectionUp {
+		return m.activeFormCursorRow(paneWidth)
+	}
+
+	switch m.focusIndex {
+	case addProviderBaseURLField:
+		return 0
+	case addProviderAPIKeyField:
+		return m.formFieldStartRow(addProviderAPIKeyField, paneWidth)
+	default:
+		return m.activeFormCursorRow(paneWidth)
+	}
+}
+
+func (m *appModel) moveModelsCursorToFirstRow() {
+	moveModelsInputCursorToFirstRow(&m.modelsInput, m.activeFormPaneWidth())
+}
+
+func (m *appModel) moveModelsCursorToLastRow() {
+	moveModelsInputCursorToLastRow(&m.modelsInput, m.activeFormPaneWidth())
+}
+
+func (m *appModel) setFormFocus(index int) {
+	if index < addProviderBaseURLField || index >= addProviderFieldCount {
+		return
+	}
+	if m.focusIndex != index {
+		m.blurFocusedInput()
+		m.focusIndex = index
+	}
+	m.focusCurrentInput()
+}
+
+func (m appModel) handleVerticalFormNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	direction := formScrollDirectionForKey(msg.String())
+
+	switch m.focusIndex {
+	case addProviderBaseURLField:
+		if direction == formScrollDirectionUp {
+			m.setFormFocus(addProviderModelsField)
+			m.moveModelsCursorToLastRow()
+			m.scrollFormPaneToBottom()
+			return m, nil
+		}
+	case addProviderAPIKeyField:
+		if direction == formScrollDirectionDown {
+			m.setFormFocus(addProviderModelsField)
+			m.moveModelsCursorToFirstRow()
+			m.syncFormPaneScrollWithDirection(direction)
+			return m, nil
+		}
+	case addProviderModelsField:
+		if direction == formScrollDirectionUp && modelsInputIsFirstRow(m.modelsInput) {
+			m.setFormFocus(addProviderAPIKeyField)
+			m.syncFormPaneScrollWithDirection(direction)
+			return m, nil
+		}
+		if direction == formScrollDirectionDown && modelsInputIsLastRow(m.modelsInput) {
+			m.setFormFocus(addProviderBaseURLField)
+			m.scrollFormPaneToTop()
+			return m, nil
+		}
+		return m.updateModelsInput(msg)
+	}
+
+	m.cycleFocus(msg.String())
+	return m, nil
+}
+
+func (m *appModel) scrollFormPaneToTop() {
+	m.formPaneScrollOffset = 0
+	m.syncFormPaneScrollWithDirection(formScrollDirectionUp)
+}
+
+func (m *appModel) scrollFormPaneToBottom() {
+	layout := m.formPaneLayout()
+	visibleHeight := m.formPaneVisibleContentHeight()
+	m.formPaneScrollOffset = maxInt(0, len(layout.wrappedLines)-visibleHeight)
 }
 
 func rebuildModelsInput(input textarea.Model, paneWidth int) textarea.Model {
@@ -274,7 +437,7 @@ func (m *appModel) cycleFocus(direction string) {
 		m.focusIndex = 0
 	}
 	m.focusCurrentInput()
-	m.syncFormPaneScroll()
+	m.syncFormPaneScrollWithDirection(formScrollDirectionForKey(direction))
 }
 
 func (m *appModel) blurFocusedInput() {
