@@ -2,12 +2,16 @@ package main
 
 import (
 	"fmt"
+	"math"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 var (
+	trailingANSIPattern        = regexp.MustCompile(`(?:\x1b\[[0-9;?]*[ -/]*[@-~])*$`)
 	defaultPaneBorderColor     = lipgloss.Color("177")
 	resultsPaneBorderColor     = lipgloss.Color("214")
 	addProviderPaneBorderColor = lipgloss.Color("78")
@@ -27,6 +31,12 @@ var (
 	inputStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 )
 
+type paneScrollbarMeta struct {
+	totalLines     int
+	visibleLines   int
+	viewportOffset int
+}
+
 func (m appModel) View() string {
 	if m.mode == addMode {
 		return m.formView()
@@ -40,10 +50,11 @@ func (m appModel) listView() string {
 		resultsPaneBorderColor,
 		m.resultListView(),
 		m.listBottomContent(),
+		false,
 	)
 }
 
-func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.Color, rightBody, bottomContent string) string {
+func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.Color, rightBody, bottomContent string, rightPaneScrollbar bool) string {
 	header := m.renderPageHeaderWithPrompt()
 	paneWidth := listPaneWidth(m.width)
 	bodyHeight := m.availableListBodyHeight(header, bottomContent)
@@ -53,13 +64,24 @@ func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.C
 		bodyHeight,
 		m.providerListView(),
 	)
-	rightPane := renderTitledPaneWithHeight(
-		rightTitle,
-		paneWidth,
-		bodyHeight,
-		rightBody,
-		rightBorderColor,
-	)
+	var rightPane string
+	if rightPaneScrollbar {
+		rightPane = renderTitledPaneWithHeightAndRightScrollbar(
+			rightTitle,
+			paneWidth,
+			bodyHeight,
+			rightBody,
+			rightBorderColor,
+		)
+	} else {
+		rightPane = renderTitledPaneWithHeight(
+			rightTitle,
+			paneWidth,
+			bodyHeight,
+			rightBody,
+			rightBorderColor,
+		)
+	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, providerPane, rightPane)
 	mainContent := lipgloss.JoinVertical(lipgloss.Left,
 		header,
@@ -90,6 +112,7 @@ func (m appModel) formView() string {
 		addProviderPaneBorderColor,
 		m.formPaneBody(),
 		m.formBottomContent(),
+		true,
 	)
 }
 
@@ -297,22 +320,108 @@ func renderTitledPaneWithHeight(title string, width, height int, body string, bo
 		return renderTitledPane(title, width, body, resolvedBorderColor)
 	}
 
-	contentHeight := maxInt(0, height-paneVerticalChrome)
-	wrappedBody := wrapPaneBody(width, body)
-	lines := []string{}
-	if wrappedBody != "" {
-		lines = strings.Split(wrappedBody, "\n")
-	}
-
-	switch {
-	case len(lines) > contentHeight:
-		lines = lines[:contentHeight]
-	case len(lines) < contentHeight:
-		lines = append(lines, make([]string, contentHeight-len(lines))...)
-	}
-
+	lines, _ := layoutPaneBodyForHeight(width, height, body)
 	rendered := paneStyle.Copy().BorderForeground(resolvedBorderColor).Width(width).Render(strings.Join(lines, "\n"))
 	return renderTitledPaneFromRendered(title, rendered, resolvedBorderColor)
+}
+
+func renderTitledPaneWithHeightAndRightScrollbar(title string, width, height int, body string, borderColor ...lipgloss.Color) string {
+	resolvedBorderColor := resolvePaneBorderColor(borderColor...)
+
+	if height <= 0 {
+		return renderTitledPane(title, width, body, resolvedBorderColor)
+	}
+
+	lines, scrollbar := layoutPaneBodyForHeight(width, height, body)
+	rendered := paneStyle.Copy().BorderForeground(resolvedBorderColor).Width(width).Render(strings.Join(lines, "\n"))
+	titledPane := renderTitledPaneFromRendered(title, rendered, resolvedBorderColor)
+	return rewriteRenderedPaneRightBorderWithScrollbar(titledPane, resolvedBorderColor, scrollbar)
+}
+
+func layoutPaneBodyForHeight(width, height int, body string) ([]string, paneScrollbarMeta) {
+	contentHeight := maxInt(0, height-paneVerticalChrome)
+	wrappedBody := wrapPaneBody(width, body)
+	wrappedLines := splitWrappedPaneLines(wrappedBody)
+	visibleLines := minInt(len(wrappedLines), contentHeight)
+	layoutLines := append([]string(nil), wrappedLines...)
+
+	switch {
+	case len(layoutLines) > contentHeight:
+		layoutLines = layoutLines[:contentHeight]
+	case len(layoutLines) < contentHeight:
+		layoutLines = append(layoutLines, make([]string, contentHeight-len(layoutLines))...)
+	}
+
+	return layoutLines, paneScrollbarMeta{
+		totalLines:   len(wrappedLines),
+		visibleLines: visibleLines,
+	}
+}
+
+func splitWrappedPaneLines(wrappedBody string) []string {
+	if wrappedBody == "" {
+		return nil
+	}
+	return strings.Split(wrappedBody, "\n")
+}
+
+func rewriteRenderedPaneRightBorderWithScrollbar(rendered string, borderColor lipgloss.Color, scrollbar paneScrollbarMeta) string {
+	lines := strings.Split(rendered, "\n")
+	if len(lines) <= 2 {
+		return rendered
+	}
+
+	thumbStart, thumbEnd, ok := scrollbar.thumbRange(len(lines) - 2)
+	if !ok {
+		return rendered
+	}
+
+	trackGlyph := lipgloss.RoundedBorder().Right
+	for row := 1; row < len(lines)-1; row++ {
+		glyph := trackGlyph
+		if row-1 >= thumbStart && row-1 < thumbEnd {
+			glyph = "▌"
+		}
+		lines[row] = replaceRenderedPaneRightBorderGlyph(lines[row], glyph, borderColor)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func replaceRenderedPaneRightBorderGlyph(line, glyph string, borderColor lipgloss.Color) string {
+	suffix := trailingANSIPattern.FindString(line)
+	base := line[:len(line)-len(suffix)]
+	if base == "" {
+		return line
+	}
+
+	_, lastRuneSize := utf8.DecodeLastRuneInString(base)
+	if lastRuneSize <= 0 {
+		return line
+	}
+
+	return base[:len(base)-lastRuneSize] + paneBorderStyle.Copy().Foreground(borderColor).Render(glyph) + suffix
+}
+
+func (m paneScrollbarMeta) thumbRange(trackHeight int) (int, int, bool) {
+	if trackHeight <= 0 || m.totalLines <= 0 || m.visibleLines <= 0 || m.totalLines <= m.visibleLines {
+		return 0, 0, false
+	}
+
+	visibleLines := minInt(m.visibleLines, m.totalLines)
+	thumbHeight := maxInt(1, int(math.Ceil(float64(trackHeight*visibleLines)/float64(m.totalLines))))
+	thumbHeight = minInt(trackHeight, thumbHeight)
+
+	maxOffset := maxInt(0, m.totalLines-visibleLines)
+	viewportOffset := maxInt(0, minInt(m.viewportOffset, maxOffset))
+	if maxOffset == 0 || thumbHeight >= trackHeight {
+		return 0, thumbHeight, true
+	}
+
+	travel := trackHeight - thumbHeight
+	thumbStart := int(math.Round(float64(travel*viewportOffset) / float64(maxOffset)))
+	thumbStart = maxInt(0, minInt(thumbStart, travel))
+	return thumbStart, thumbStart + thumbHeight, true
 }
 
 func resolvePaneBorderColor(borderColor ...lipgloss.Color) lipgloss.Color {
@@ -349,6 +458,13 @@ func renderShortcutFooter(text string) string {
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

@@ -62,6 +62,30 @@ func renderedLines(text string) []string {
 	return lines
 }
 
+func firstRuneString(text string) string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return ""
+	}
+	return string(runes[0])
+}
+
+func lastRuneString(text string) string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return ""
+	}
+	return string(runes[len(runes)-1])
+}
+
+func trimLastRune(text string) string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return text
+	}
+	return string(runes[:len(runes)-1])
+}
+
 func TestFormViewWithChinesePlaceholdersDoesNotPanic(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 	m.mode = addMode
@@ -1563,6 +1587,165 @@ func TestRenderTitledPaneWithHeightClampsWrappedSingleLineContent(t *testing.T) 
 	}
 	if !strings.Contains(lines[len(lines)-1], border.BottomLeft) || !strings.Contains(lines[len(lines)-1], border.BottomRight) {
 		t.Fatalf("expected bottom border on final line, got %q", lines[len(lines)-1])
+	}
+}
+
+func TestRenderTitledPaneWithHeightAndRightScrollbarUsesBorderTrackOnOverflow(t *testing.T) {
+	width := 24
+	height := 8
+	body := strings.Repeat("https://provider.example.com/v1/models/super-long-name", 2)
+	rendered := renderTitledPaneWithHeightAndRightScrollbar("Add Provider", width, height, body, addProviderPaneBorderColor)
+	lines := renderedLines(rendered)
+	border := lipgloss.RoundedBorder()
+
+	if !strings.Contains(lines[0], stripANSI(renderPaneTitle("Add Provider", addProviderPaneBorderColor))) {
+		t.Fatalf("expected titled top border preserved, got %q", lines[0])
+	}
+	if !strings.Contains(lines[len(lines)-1], border.BottomLeft) || !strings.Contains(lines[len(lines)-1], border.BottomRight) {
+		t.Fatalf("expected bottom border preserved, got %q", lines[len(lines)-1])
+	}
+
+	thumbRows := 0
+	trackRows := 0
+	for _, line := range lines[1 : len(lines)-1] {
+		if first := firstRuneString(line); first != border.Left {
+			t.Fatalf("expected left border preserved, got %q", line)
+		}
+		switch lastRuneString(line) {
+		case "▌":
+			thumbRows++
+		case border.Right:
+			trackRows++
+		default:
+			t.Fatalf("expected right border track glyph on body row, got %q", line)
+		}
+	}
+
+	if thumbRows == 0 {
+		t.Fatalf("expected scrollbar thumb rows on overflow, got %q", rendered)
+	}
+	if trackRows == 0 {
+		t.Fatalf("expected scrollbar track rows outside the thumb, got %q", rendered)
+	}
+}
+
+func TestRenderTitledPaneWithHeightAndRightScrollbarKeepsPlainBorderWithoutOverflow(t *testing.T) {
+	width := 28
+	height := 10
+	body := "Base URL\nAPI key\nModels"
+	rendered := renderTitledPaneWithHeightAndRightScrollbar("Add Provider", width, height, body, addProviderPaneBorderColor)
+	lines := renderedLines(rendered)
+	border := lipgloss.RoundedBorder()
+
+	if strings.Contains(stripANSI(rendered), "▌") {
+		t.Fatalf("expected no scrollbar thumb without overflow, got %q", rendered)
+	}
+
+	for _, line := range lines[1 : len(lines)-1] {
+		if last := lastRuneString(line); last != border.Right {
+			t.Fatalf("expected plain right border without overflow, got %q", line)
+		}
+	}
+}
+
+func TestPaneScrollbarThumbRangeReflectsVisibleRatioAndOffset(t *testing.T) {
+	tests := []struct {
+		name        string
+		meta        paneScrollbarMeta
+		trackHeight int
+		wantStart   int
+		wantEnd     int
+	}{
+		{
+			name:        "middle-window",
+			meta:        paneScrollbarMeta{totalLines: 20, visibleLines: 6, viewportOffset: 7},
+			trackHeight: 10,
+			wantStart:   4,
+			wantEnd:     7,
+		},
+		{
+			name:        "bottom-window",
+			meta:        paneScrollbarMeta{totalLines: 20, visibleLines: 6, viewportOffset: 14},
+			trackHeight: 10,
+			wantStart:   7,
+			wantEnd:     10,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotStart, gotEnd, ok := tc.meta.thumbRange(tc.trackHeight)
+			if !ok {
+				t.Fatal("expected scrollbar thumb for overflowing content")
+			}
+			if gotStart != tc.wantStart || gotEnd != tc.wantEnd {
+				t.Fatalf("expected thumb range [%d,%d), got [%d,%d)", tc.wantStart, tc.wantEnd, gotStart, gotEnd)
+			}
+		})
+	}
+}
+
+func TestRenderTitledPaneWithHeightAndRightScrollbarPreservesContentWidth(t *testing.T) {
+	width := 24
+	height := 8
+	body := strings.Repeat("https://provider.example.com/v1/models/super-long-name", 2)
+	plainLines := renderedLines(renderTitledPaneWithHeight("Add Provider", width, height, body, addProviderPaneBorderColor))
+	scrollbarLines := renderedLines(renderTitledPaneWithHeightAndRightScrollbar("Add Provider", width, height, body, addProviderPaneBorderColor))
+
+	if len(plainLines) != len(scrollbarLines) {
+		t.Fatalf("expected same line count, got plain=%d scrollbar=%d", len(plainLines), len(scrollbarLines))
+	}
+
+	for i := 1; i < len(plainLines)-1; i++ {
+		if got, want := lipgloss.Width(scrollbarLines[i]), lipgloss.Width(plainLines[i]); got != want {
+			t.Fatalf("expected line %d width %d, got %d", i, want, got)
+		}
+		if got, want := trimLastRune(scrollbarLines[i]), trimLastRune(plainLines[i]); got != want {
+			t.Fatalf("expected line %d content preserved before right border\nwant: %q\ngot:  %q", i, want, got)
+		}
+	}
+}
+
+func TestRightBorderScrollbarStaysScopedToAddEditPane(t *testing.T) {
+	width := 24
+	height := 8
+	body := strings.Repeat("https://provider.example.com/v1/models/super-long-name", 2)
+
+	providerPane := renderTitledPaneWithHeight("Providers", width, height, body)
+	resultsPane := renderTitledPaneWithHeight("Results", width, height, body, resultsPaneBorderColor)
+	formPane := renderTitledPaneWithHeightAndRightScrollbar("Add Provider", width, height, body, addProviderPaneBorderColor)
+
+	if strings.Contains(stripANSI(providerPane), "▌") {
+		t.Fatalf("expected providers pane to keep its plain border, got %q", providerPane)
+	}
+	if strings.Contains(stripANSI(resultsPane), "▌") {
+		t.Fatalf("expected results pane to keep its plain border, got %q", resultsPane)
+	}
+	if !strings.Contains(stripANSI(formPane), "▌") {
+		t.Fatalf("expected add/edit pane to render a scrollbar on overflow, got %q", formPane)
+	}
+}
+
+func TestFormViewRoutesScrollbarToAddPaneWhileListViewStaysPlain(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{
+		{BaseURL: "https://one", Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}},
+		{BaseURL: "https://two", Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}},
+		{BaseURL: "https://three", Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}},
+	}}, "juicy-providers.json")
+	m.width = 100
+	m.height = 16
+	m.modelsInput.SetValue("gpt-4o-mini\nqwen-max\nclaude-3.5-sonnet\nllama-3.1-8b\nqvq-plus\ndeepseek-chat")
+	setFocusedFormField(&m, addProviderModelsField)
+
+	listView := stripANSI(m.listView())
+	if strings.Contains(listView, "▌") {
+		t.Fatalf("expected list view panes to keep plain borders, got %q", listView)
+	}
+
+	m.mode = addMode
+	formView := stripANSI(m.formView())
+	if !strings.Contains(formView, "▌") {
+		t.Fatalf("expected add/edit form view to render the right-border scrollbar, got %q", formView)
 	}
 }
 
