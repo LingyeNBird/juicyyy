@@ -12,6 +12,10 @@ import (
 	"time"
 )
 
+func testRequestSettings() requestSettings {
+	return defaultRequestSettings()
+}
+
 func TestSplitModels(t *testing.T) {
 	got := splitModels("gpt-4o-mini, gpt-4o-mini, llama-3.1-8b , , qwen-max")
 	want := []string{"gpt-4o-mini", "llama-3.1-8b", "qwen-max"}
@@ -35,11 +39,32 @@ func TestBuildChatCompletionURL(t *testing.T) {
 		{name: "base v1", in: "https://example.com/v1", want: "https://example.com/v1/chat/completions"},
 		{name: "full endpoint", in: "https://example.com/v1/chat/completions", want: "https://example.com/v1/chat/completions"},
 		{name: "query preserved", in: "https://example.com/openai/v1?api-version=2024-10-21", want: "https://example.com/openai/v1/chat/completions?api-version=2024-10-21"},
+		{name: "swap responses endpoint", in: "https://example.com/v1/responses", want: "https://example.com/v1/chat/completions"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := buildChatCompletionURL(tt.in); got != tt.want {
+				t.Fatalf("unexpected url: got %q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildResponsesURL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "base v1", in: "https://example.com/v1", want: "https://example.com/v1/responses"},
+		{name: "full endpoint", in: "https://example.com/v1/responses", want: "https://example.com/v1/responses"},
+		{name: "swap chat endpoint", in: "https://example.com/v1/chat/completions", want: "https://example.com/v1/responses"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildResponsesURL(tt.in); got != tt.want {
 				t.Fatalf("unexpected url: got %q want %q", got, tt.want)
 			}
 		})
@@ -124,7 +149,7 @@ func TestCheckModelRetriesZeroAndKeepsHighest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", juicyPrompt)
+	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", testRequestSettings())
 
 	if result.Error != "" {
 		t.Fatalf("unexpected error: %s", result.Error)
@@ -146,7 +171,7 @@ func TestCheckModelRetriesNonnumericAndKeepsHighest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", juicyPrompt)
+	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", testRequestSettings())
 
 	if result.Error != "" {
 		t.Fatalf("unexpected error: %s", result.Error)
@@ -168,7 +193,7 @@ func TestCheckModelReturnsErrorWhenAllRetryableAttemptsFail(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", juicyPrompt)
+	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", testRequestSettings())
 
 	if result.Value != "0" {
 		t.Fatalf("unexpected value: got %q want %q", result.Value, "0")
@@ -190,7 +215,7 @@ func TestCheckModelDoesNotRetryAPIErrors(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", juicyPrompt)
+	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", testRequestSettings())
 
 	if result.Value != "" {
 		t.Fatalf("unexpected value: %q", result.Value)
@@ -204,7 +229,7 @@ func TestCheckModelDoesNotRetryAPIErrors(t *testing.T) {
 }
 
 func TestRunJuicyChecksEmptyModels(t *testing.T) {
-	results := runJuicyChecks(context.Background(), provider{BaseURL: "https://example.com", Models: nil}, juicyPrompt, 5)
+	results := runJuicyChecks(context.Background(), provider{BaseURL: "https://example.com", Models: nil}, testRequestSettings(), 5)
 	if len(results) != 0 {
 		t.Fatalf("expected empty results, got %d", len(results))
 	}
@@ -233,7 +258,7 @@ func TestRunJuicyChecksPreservesModelOrder(t *testing.T) {
 		Models: []string{"slow", "fast", "medium"},
 	}
 
-	results := runJuicyChecks(context.Background(), selected, juicyPrompt, 3)
+	results := runJuicyChecks(context.Background(), selected, testRequestSettings(), 3)
 	if len(results) != 3 {
 		t.Fatalf("unexpected results length: got %d want 3", len(results))
 	}
@@ -260,7 +285,9 @@ func TestRunSingleAttemptSetsAuthorizationHeaderWhenAPIKeyPresent(t *testing.T) 
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"9"}}]}`)
 	}), APIKey: "secret"}
 
-	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", "custom prompt")
+	settings := testRequestSettings()
+	settings.Prompt = "custom prompt"
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", settings)
 	if !outcome.hasNumeric || outcome.formatted != "9" {
 		t.Fatalf("unexpected outcome: %+v", outcome)
 	}
@@ -274,8 +301,32 @@ func TestRunSingleAttemptOmitsAuthorizationHeaderWhenAPIKeyEmpty(t *testing.T) {
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"11"}}]}`)
 	})}
 
-	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", juicyPrompt)
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", testRequestSettings())
 	if !outcome.hasNumeric || outcome.formatted != "11" {
+		t.Fatalf("unexpected outcome: %+v", outcome)
+	}
+}
+
+func TestRunSingleAttemptSupportsResponsesMode(t *testing.T) {
+	selected := provider{BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var req responsesRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if got := req.Input[0].Content; got != "custom prompt" {
+			t.Fatalf("unexpected prompt content: %q", got)
+		}
+		fmt.Fprint(w, `{"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"12"}]}]}`)
+	})}
+	settings := testRequestSettings()
+	settings.Mode = requestModeResponses
+	settings.Prompt = "custom prompt"
+
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", settings)
+	if !outcome.hasNumeric || outcome.formatted != "12" {
 		t.Fatalf("unexpected outcome: %+v", outcome)
 	}
 }

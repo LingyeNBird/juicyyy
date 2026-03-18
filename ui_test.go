@@ -476,14 +476,20 @@ func TestModelsInputPasteGrowthKeepsFirstWrappedLineVisible(t *testing.T) {
 	}
 }
 
-func TestNewModelSeedsPromptInputWithDefault(t *testing.T) {
+func TestNewModelSeedsRequestSettingsWithDefaults(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 
-	if got := m.promptInput.Value(); got != juicyPrompt {
+	if got := m.requestPromptInput.Value(); got != juicyPrompt {
 		t.Fatalf("expected default prompt %q, got %q", juicyPrompt, got)
 	}
-	if m.promptEditing {
-		t.Fatal("expected prompt editing to start inactive")
+	if got := m.requestTimeoutInput.Value(); got != "180" {
+		t.Fatalf("expected default timeout 180, got %q", got)
+	}
+	if got := m.requestRetryInput.Value(); got != "5" {
+		t.Fatalf("expected default retries 5, got %q", got)
+	}
+	if m.requestMode != requestModeCompatible {
+		t.Fatalf("expected default request mode %q, got %q", requestModeCompatible, m.requestMode)
 	}
 }
 
@@ -528,7 +534,7 @@ func TestModelEnterStartsChecksAndClearsResults(t *testing.T) {
 	}
 }
 
-func TestModelEnterUsesEditedPromptForChecks(t *testing.T) {
+func TestModelEnterUsesSavedRequestPromptForChecks(t *testing.T) {
 	var capturedPrompt string
 	m := newModel(appConfig{Providers: []provider{{
 		BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
@@ -541,7 +547,8 @@ func TestModelEnterUsesEditedPromptForChecks(t *testing.T) {
 		}),
 		Models: []string{"gpt-4o-mini"},
 	}}}, "juicy-providers.json")
-	m.promptInput.SetValue("edited juicy prompt")
+	m.config.RequestSettings = normalizeRequestSettings(requestSettings{Prompt: "edited juicy prompt"})
+	m.preloadRequestSettingsForm(m.config.RequestSettings)
 
 	cmd := m.startChecks()
 	if cmd == nil {
@@ -560,37 +567,59 @@ func TestModelEnterUsesEditedPromptForChecks(t *testing.T) {
 	}
 }
 
-func TestModelTabFocusesPromptAndTypingUpdatesIt(t *testing.T) {
+func TestModelRequestSettingsModeOpensFromOAndSaves(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated, cmd := m.Update(keyRunes('o'))
 	got := updated.(appModel)
 	if cmd != nil {
 		t.Fatal("expected no command")
 	}
-	if !got.promptEditing {
-		t.Fatal("expected prompt editing to be active")
+	if got.mode != requestSettingsMode {
+		t.Fatalf("expected request settings mode, got %v", got.mode)
+	}
+	if got.focusIndex != requestSettingsPromptField {
+		t.Fatalf("expected prompt field focus, got %d", got.focusIndex)
 	}
 
 	updated, cmd = got.Update(keyRunes('!'))
 	got = updated.(appModel)
 	if cmd == nil {
-		t.Fatal("expected textinput command while editing prompt")
+		t.Fatal("expected textinput command while editing request prompt")
 	}
-	if !strings.HasSuffix(got.promptInput.Value(), "!") {
-		t.Fatalf("expected prompt to be updated, got %q", got.promptInput.Value())
+	if !strings.HasSuffix(got.requestPromptInput.Value(), "!") {
+		t.Fatalf("expected request prompt to be updated, got %q", got.requestPromptInput.Value())
 	}
 
-	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyTab})
 	got = updated.(appModel)
 	if cmd != nil {
-		t.Fatal("expected no command when finishing prompt edit")
+		t.Fatal("expected no command when moving focus")
 	}
-	if got.promptEditing {
-		t.Fatal("expected prompt editing to finish on enter")
+	if got.focusIndex != requestSettingsTimeoutField {
+		t.Fatalf("expected timeout field focus, got %d", got.focusIndex)
 	}
-	if got.running {
-		t.Fatal("expected finishing prompt edit not to start checks")
+
+	got.requestTimeoutInput.SetValue("240")
+	got.requestRetryInput.SetValue("2")
+	got.requestMode = requestModeResponses
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	got = updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command when saving request settings")
+	}
+	if got.mode != listMode {
+		t.Fatalf("expected request settings save to return to list mode, got %v", got.mode)
+	}
+	if got.config.RequestSettings.TimeoutSeconds != 240 {
+		t.Fatalf("expected saved timeout 240, got %d", got.config.RequestSettings.TimeoutSeconds)
+	}
+	if got.config.RequestSettings.RetryCount != 2 {
+		t.Fatalf("expected saved retries 2, got %d", got.config.RequestSettings.RetryCount)
+	}
+	if got.config.RequestSettings.Mode != requestModeResponses {
+		t.Fatalf("expected saved mode %q, got %q", requestModeResponses, got.config.RequestSettings.Mode)
 	}
 }
 
@@ -1688,12 +1717,6 @@ func TestListViewUsesSharedHeadersAndEmptyStates(t *testing.T) {
 			if !strings.Contains(view, pageTitleStyle.Render("Juicy 批量检测器")) {
 				t.Fatalf("expected page title in view: %q", view)
 			}
-			if !strings.Contains(view, fieldLabelStyle.Render("提示词：")) {
-				t.Fatalf("expected prompt label in view: %q", view)
-			}
-			if !strings.Contains(view, juicyPrompt) {
-				t.Fatalf("expected default prompt in view: %q", view)
-			}
 			if !strings.Contains(stripANSI(view), "|供应商[p]|") {
 				t.Fatalf("expected provider pane title in view: %q", view)
 			}
@@ -2127,9 +2150,6 @@ func TestFinishRunScrollsResultsPaneToLatestActiveResult(t *testing.T) {
 	if m.activeResult != len(results)-1 {
 		t.Fatalf("expected latest result to become active, got %d want %d", m.activeResult, len(results)-1)
 	}
-	if m.resultsPaneScrollOffset <= 0 {
-		t.Fatalf("expected results pane to scroll to the latest result, got %d", m.resultsPaneScrollOffset)
-	}
 
 	layout := m.resultPaneLayout()
 	visibleHeight := m.splitPaneVisibleContentHeight(m.listBottomContent())
@@ -2161,7 +2181,7 @@ func TestFinishRunKeepsWrappedLatestResultFullyVisibleAfterStatusUpdate(t *testi
 	}
 }
 
-func TestPromptEditingReflowResyncsVisiblePaneScrolls(t *testing.T) {
+func TestEnteringRequestSettingsKeepsProviderSelectionVisible(t *testing.T) {
 	providers := make([]provider, 0, 8)
 	for i := 0; i < 8; i++ {
 		providers = append(providers, provider{
@@ -2177,15 +2197,15 @@ func TestPromptEditingReflowResyncsVisiblePaneScrolls(t *testing.T) {
 	m.syncProviderPaneScroll(paneScrollDirectionDown)
 	before := m.providerPaneScrollOffset
 
-	m.focusPromptInput()
+	m.enterRequestSettingsMode()
 
 	if m.providerPaneScrollOffset < before {
-		t.Fatalf("expected prompt editing reflow to keep provider selection visible, before=%d after=%d", before, m.providerPaneScrollOffset)
+		t.Fatalf("expected request settings view to keep provider selection visible, before=%d after=%d", before, m.providerPaneScrollOffset)
 	}
 	layout := m.providerPaneLayout()
-	visibleHeight := m.splitPaneVisibleContentHeight(m.listBottomContent())
+	visibleHeight := m.splitPaneVisibleContentHeight(m.formBottomContent())
 	if layout.activeCursorRow < m.providerPaneScrollOffset || layout.activeEndRow >= m.providerPaneScrollOffset+visibleHeight {
-		t.Fatalf("expected selected provider span [%d,%d] inside [%d,%d) after prompt edit reflow", layout.activeCursorRow, layout.activeEndRow, m.providerPaneScrollOffset, m.providerPaneScrollOffset+visibleHeight)
+		t.Fatalf("expected selected provider span [%d,%d] inside [%d,%d) after entering request settings", layout.activeCursorRow, layout.activeEndRow, m.providerPaneScrollOffset, m.providerPaneScrollOffset+visibleHeight)
 	}
 }
 
@@ -2361,6 +2381,22 @@ func TestFocusChangeRepositionsFormPaneScrollForNewActiveField(t *testing.T) {
 	assertActiveFormCursorVisible(t, got)
 }
 
+func TestRequestSettingsFocusScrollsLowerFieldsIntoView(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.mode = requestSettingsMode
+	m.width = 80
+	m.height = 12
+	m.preloadRequestSettingsForm(m.config.RequestSettings)
+	setFocusedFormField(&m, requestSettingsRetryField)
+	m.syncFormPaneScroll()
+
+	if m.formPaneScrollOffset <= 0 {
+		t.Fatalf("expected request settings pane to scroll for lower fields, got %d", m.formPaneScrollOffset)
+	}
+	assertActiveFormCursorVisible(t, m)
+	assertFormFieldStartVisible(t, m, requestSettingsRetryField)
+}
+
 func TestListViewKeepsResultsPaneAboveBottomBarAcrossViewportHeights(t *testing.T) {
 	border := lipgloss.RoundedBorder()
 
@@ -2469,7 +2505,7 @@ func TestListViewClampsGracefullyForZeroAndSmallHeights(t *testing.T) {
 
 				headerHeight, _, bottomHeight := listLayoutHeightsForTest(m)
 				availableHeight := m.availableListBodyHeight(
-					m.renderPageHeaderWithPrompt(),
+					m.pageHeader(),
 					m.listBottomContent(),
 				)
 				if availableHeight != 0 {
@@ -2699,6 +2735,35 @@ func TestViewSwitchesOnlyRightPaneInAddMode(t *testing.T) {
 	}
 }
 
+func TestViewSwitchesOnlyRightPaneInRequestSettingsMode(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", Models: []string{"gpt-4o-mini"}}}}, "juicy-providers.json")
+	m.width = 100
+	m.height = 20
+
+	updated, cmd := m.Update(keyRunes('o'))
+	got := updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.mode != requestSettingsMode {
+		t.Fatalf("expected request settings mode, got %v", got.mode)
+	}
+
+	view := got.View()
+	if !strings.Contains(view, renderPaneTitle("供应商")) {
+		t.Fatalf("expected provider pane to remain visible in request settings mode: %q", view)
+	}
+	if !strings.Contains(view, renderPaneTitle("请求设置", requestPaneBorderColor)) {
+		t.Fatalf("expected red request settings pane title in view: %q", view)
+	}
+	if strings.Contains(view, renderPaneTitle("结果")) {
+		t.Fatalf("expected results pane title replaced in request settings mode: %q", view)
+	}
+	if !strings.Contains(view, renderShortcutFooter(requestSettingsModeFooterText())) {
+		t.Fatalf("expected request settings footer in view: %q", view)
+	}
+}
+
 func TestFormViewPinsStatusAndFooterToBottomWhenHeightAvailable(t *testing.T) {
 	m := newModel(appConfig{}, "juicy-providers.json")
 	m.mode = addMode
@@ -2773,7 +2838,7 @@ func keyRunes(r rune) tea.KeyMsg {
 }
 
 func listLayoutHeightsForTest(m appModel) (headerHeight, bodyHeight, bottomHeight int) {
-	header := m.renderPageHeaderWithPrompt()
+	header := m.pageHeader()
 	body := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		renderTitledPane(m.tr("供应商", "Providers"), listPaneWidth(m.width), m.providerListView()),
@@ -2865,7 +2930,7 @@ func mouseWheelDown() tea.MouseMsg {
 }
 
 func listModeFooterText() string {
-	return "快捷键：Tab 编辑提示词 | p 聚焦供应商栏 | r 聚焦结果栏 | j/k/w/s/↑/↓ 切换供应商 | a 新增供应商 | e 编辑供应商 | Enter 开始检测 | l 切换中英 | q 退出"
+	return "快捷键：p 聚焦供应商栏 | r 聚焦结果栏 | j/k/w/s/↑/↓ 切换供应商 | a 新增供应商 | e 编辑供应商 | o 请求设置 | Enter 开始检测 | l 切换中英 | q 退出"
 }
 
 func addModeFooterText() string {
@@ -2874,4 +2939,8 @@ func addModeFooterText() string {
 
 func editModeFooterText() string {
 	return "快捷键：tab/shift+tab 切换焦点 | Ctrl+S 更新 | 模型框 Enter 换行 | Esc 取消编辑 | Ctrl+L 切换中英"
+}
+
+func requestSettingsModeFooterText() string {
+	return "快捷键：tab/shift+tab 切换焦点 | ←/→/Enter 切换请求方式 | Ctrl+S 保存 | Esc 取消 | Ctrl+L 切换中英"
 }

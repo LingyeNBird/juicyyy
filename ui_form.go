@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -18,14 +19,23 @@ func newProviderInputs(lang appLanguage) (textinput.Model, textinput.Model, text
 	return baseURLInput, apiKeyInput, modelsInput
 }
 
-func newPromptInput() textinput.Model {
-	input := textinput.New()
-	input.Prompt = ""
-	input.CharLimit = 0
-	input.TextStyle = inputStyle
-	input.SetValue(juicyPrompt)
-	input.Blur()
-	return input
+func newRequestSettingsInputs(lang appLanguage, settings requestSettings) (textinput.Model, textinput.Model, textinput.Model) {
+	settings = normalizeRequestSettings(settings)
+	promptInput := newInput(inputKindText)
+	promptInput.CharLimit = 0
+	promptInput.SetValue(settings.Prompt)
+	promptInput.Focus()
+
+	timeoutInput := newInput(inputKindText)
+	timeoutInput.SetValue(strconv.Itoa(settings.TimeoutSeconds))
+	timeoutInput.Blur()
+
+	retryInput := newInput(inputKindText)
+	retryInput.SetValue(strconv.Itoa(settings.RetryCount))
+	retryInput.Blur()
+
+	applyRequestSettingsLocale(&promptInput, &timeoutInput, &retryInput, lang, formPaneWidth(0))
+	return promptInput, timeoutInput, retryInput
 }
 
 func newInput(kind inputKind) textinput.Model {
@@ -80,6 +90,10 @@ func syncModelsInputLayout(input *textarea.Model, paneWidth int) {
 }
 
 func (m appModel) updateInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.mode == requestSettingsMode {
+		return m.updateRequestSettingsInputs(msg)
+	}
+
 	switch m.focusIndex {
 	case addProviderBaseURLField:
 		var cmd tea.Cmd
@@ -93,6 +107,30 @@ func (m appModel) updateInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case addProviderModelsField:
 		return m.updateModelsInput(msg)
+	}
+	return m, nil
+}
+
+func (m appModel) updateRequestSettingsInputs(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch m.focusIndex {
+	case requestSettingsPromptField:
+		var cmd tea.Cmd
+		m.requestPromptInput, cmd = m.requestPromptInput.Update(msg)
+		m.syncFormPaneScroll()
+		return m, cmd
+	case requestSettingsTimeoutField:
+		var cmd tea.Cmd
+		m.requestTimeoutInput, cmd = m.requestTimeoutInput.Update(msg)
+		m.syncFormPaneScroll()
+		return m, cmd
+	case requestSettingsRetryField:
+		var cmd tea.Cmd
+		m.requestRetryInput, cmd = m.requestRetryInput.Update(msg)
+		m.syncFormPaneScroll()
+		return m, cmd
+	case requestSettingsModeField:
+		m.syncFormPaneScroll()
+		return m, nil
 	}
 	return m, nil
 }
@@ -159,6 +197,10 @@ func moveModelsInputCursorToLastRow(input *textarea.Model, paneWidth int) {
 }
 
 func (m appModel) formFieldInputCursorRow(fieldIndex, paneWidth int) int {
+	if m.mode == requestSettingsMode {
+		return 0
+	}
+
 	switch fieldIndex {
 	case addProviderBaseURLField, addProviderAPIKeyField:
 		return 0
@@ -172,11 +214,17 @@ func (m appModel) formFieldInputCursorRow(fieldIndex, paneWidth int) int {
 }
 
 func (m appModel) formFieldActiveCursorRow(fieldIndex, paneWidth int) int {
-	if fieldIndex < addProviderBaseURLField || fieldIndex >= addProviderFieldCount {
+	fields := formFields
+	if m.mode == requestSettingsMode {
+		if fieldIndex < requestSettingsPromptField || fieldIndex >= requestSettingsFieldCount {
+			return 0
+		}
+		fields = requestSettingsFields
+	} else if fieldIndex < addProviderBaseURLField || fieldIndex >= addProviderFieldCount {
 		return 0
 	}
 
-	labelRows := len(wrapPaneContentLines(paneContentWidth(paneWidth), renderFieldLabel(formFields[fieldIndex].label.forLang(m.lang))))
+	labelRows := len(wrapPaneContentLines(paneContentWidth(paneWidth), renderFieldLabel(fields[fieldIndex].label.forLang(m.lang))))
 	return labelRows + m.formFieldInputCursorRow(fieldIndex, paneWidth)
 }
 
@@ -200,7 +248,11 @@ func (m appModel) formFieldStartRow(fieldIndex, paneWidth int) int {
 }
 
 func (m appModel) activeFormCursorRow(paneWidth int) int {
-	if m.focusIndex < addProviderBaseURLField || m.focusIndex >= addProviderFieldCount {
+	fieldCount := addProviderFieldCount
+	if m.mode == requestSettingsMode {
+		fieldCount = requestSettingsFieldCount
+	}
+	if m.focusIndex < 0 || m.focusIndex >= fieldCount {
 		return 0
 	}
 	return m.formFieldStartRow(m.focusIndex, paneWidth) + m.formFieldActiveCursorRow(m.focusIndex, paneWidth)
@@ -211,7 +263,7 @@ func (m *appModel) syncFormPaneScroll() {
 }
 
 func (m *appModel) syncFormPaneScrollWithDirection(direction paneScrollDirection) {
-	if m.mode != addMode {
+	if m.mode == listMode {
 		m.formPaneScrollOffset = 0
 		return
 	}
@@ -223,6 +275,10 @@ func (m *appModel) syncFormPaneScrollWithDirection(direction paneScrollDirection
 }
 
 func (m appModel) formScrollAnchorRow(paneWidth int, direction paneScrollDirection) int {
+	if m.mode == requestSettingsMode {
+		return m.activeFormCursorRow(paneWidth)
+	}
+
 	if direction != paneScrollDirectionUp {
 		return m.activeFormCursorRow(paneWidth)
 	}
@@ -246,7 +302,11 @@ func (m *appModel) moveModelsCursorToLastRow() {
 }
 
 func (m *appModel) setFormFocus(index int) {
-	if index < addProviderBaseURLField || index >= addProviderFieldCount {
+	fieldCount := addProviderFieldCount
+	if m.mode == requestSettingsMode {
+		fieldCount = requestSettingsFieldCount
+	}
+	if index < 0 || index >= fieldCount {
 		return
 	}
 	if m.focusIndex != index {
@@ -257,6 +317,11 @@ func (m *appModel) setFormFocus(index int) {
 }
 
 func (m appModel) handleVerticalFormNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.mode == requestSettingsMode {
+		m.cycleFocus(msg.String())
+		return m, nil
+	}
+
 	direction := paneScrollDirectionForKey(msg.String())
 
 	switch m.focusIndex {
@@ -345,6 +410,21 @@ func (m *appModel) resetForm() {
 	m.baseURLInput.Focus()
 }
 
+func (m *appModel) preloadRequestSettingsForm(settings requestSettings) {
+	settings = normalizeRequestSettings(settings)
+	m.requestPromptInput.SetValue(settings.Prompt)
+	m.requestPromptInput.Blur()
+	m.requestTimeoutInput.SetValue(strconv.Itoa(settings.TimeoutSeconds))
+	m.requestTimeoutInput.Blur()
+	m.requestRetryInput.SetValue(strconv.Itoa(settings.RetryCount))
+	m.requestRetryInput.Blur()
+	m.requestMode = settings.Mode
+	m.focusIndex = requestSettingsPromptField
+	m.formPaneScrollOffset = 0
+	m.applyPlaceholders()
+	m.requestPromptInput.Focus()
+}
+
 func (m *appModel) preloadForm(provider provider) {
 	m.baseURLInput.SetValue(provider.BaseURL)
 	m.baseURLInput.Blur()
@@ -365,10 +445,14 @@ func (m *appModel) cycleFocus(direction string) {
 	} else {
 		m.focusIndex++
 	}
-	if m.focusIndex < 0 {
-		m.focusIndex = addProviderFieldCount - 1
+	fieldCount := addProviderFieldCount
+	if m.mode == requestSettingsMode {
+		fieldCount = requestSettingsFieldCount
 	}
-	if m.focusIndex >= addProviderFieldCount {
+	if m.focusIndex < 0 {
+		m.focusIndex = fieldCount - 1
+	}
+	if m.focusIndex >= fieldCount {
 		m.focusIndex = 0
 	}
 	m.focusCurrentInput()
@@ -376,6 +460,18 @@ func (m *appModel) cycleFocus(direction string) {
 }
 
 func (m *appModel) blurFocusedInput() {
+	if m.mode == requestSettingsMode {
+		switch m.focusIndex {
+		case requestSettingsPromptField:
+			m.requestPromptInput.Blur()
+		case requestSettingsTimeoutField:
+			m.requestTimeoutInput.Blur()
+		case requestSettingsRetryField:
+			m.requestRetryInput.Blur()
+		}
+		return
+	}
+
 	switch m.focusIndex {
 	case addProviderBaseURLField:
 		m.baseURLInput.Blur()
@@ -387,6 +483,18 @@ func (m *appModel) blurFocusedInput() {
 }
 
 func (m *appModel) focusCurrentInput() {
+	if m.mode == requestSettingsMode {
+		switch m.focusIndex {
+		case requestSettingsPromptField:
+			m.requestPromptInput.Focus()
+		case requestSettingsTimeoutField:
+			m.requestTimeoutInput.Focus()
+		case requestSettingsRetryField:
+			m.requestRetryInput.Focus()
+		}
+		return
+	}
+
 	switch m.focusIndex {
 	case addProviderBaseURLField:
 		m.baseURLInput.Focus()

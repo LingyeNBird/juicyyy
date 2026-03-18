@@ -9,6 +9,46 @@ import (
 	"strings"
 )
 
+func defaultRequestSettings() requestSettings {
+	return requestSettings{
+		Prompt:         juicyPrompt,
+		TimeoutSeconds: 180,
+		Mode:           requestModeCompatible,
+		RetryCount:     5,
+	}
+}
+
+func normalizeRequestSettings(settings requestSettings) requestSettings {
+	defaults := defaultRequestSettings()
+	settings.Prompt = strings.TrimSpace(settings.Prompt)
+	if settings.Prompt == "" {
+		settings.Prompt = defaults.Prompt
+	}
+	if settings.TimeoutSeconds <= 0 {
+		settings.TimeoutSeconds = defaults.TimeoutSeconds
+	}
+	if settings.Mode != requestModeCompatible && settings.Mode != requestModeResponses {
+		settings.Mode = defaults.Mode
+	}
+	if settings.RetryCount < 0 {
+		settings.RetryCount = defaults.RetryCount
+	}
+	return settings
+}
+
+func normalizeConfig(cfg appConfig) appConfig {
+	for i := range cfg.Providers {
+		cfg.Providers[i].BaseURL = strings.TrimRight(strings.TrimSpace(cfg.Providers[i].BaseURL), "/")
+		cfg.Providers[i].Models = splitModels(strings.Join(cfg.Providers[i].Models, ","))
+	}
+	if cfg.RequestSettings == (requestSettings{}) {
+		cfg.RequestSettings = defaultRequestSettings()
+	} else {
+		cfg.RequestSettings = normalizeRequestSettings(cfg.RequestSettings)
+	}
+	return cfg
+}
+
 func loadConfig(path string) (appConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -19,23 +59,19 @@ func loadConfig(path string) (appConfig, error) {
 	}
 
 	if len(data) == 0 {
-		return appConfig{}, nil
+		return normalizeConfig(appConfig{}), nil
 	}
 
-	var cfg appConfig
+	cfg := appConfig{RequestSettings: defaultRequestSettings()}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return appConfig{}, err
 	}
 
-	for i := range cfg.Providers {
-		cfg.Providers[i].BaseURL = strings.TrimRight(strings.TrimSpace(cfg.Providers[i].BaseURL), "/")
-		cfg.Providers[i].Models = splitModels(strings.Join(cfg.Providers[i].Models, ","))
-	}
-
-	return cfg, nil
+	return normalizeConfig(cfg), nil
 }
 
 func saveConfig(path string, cfg appConfig) error {
+	cfg = normalizeConfig(cfg)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

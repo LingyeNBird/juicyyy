@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -44,22 +45,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		if m.mode != addMode && m.promptEditing {
-			return m.handlePromptKeys(msg)
-		}
-
-		if key == "ctrl+l" || (key == "l" && m.mode != addMode) {
+		if key == "ctrl+l" || (key == "l" && m.mode == listMode) {
 			m.toggleLanguage()
 			return m, nil
 		}
 
-		if m.mode == addMode {
+		if m.mode != listMode {
 			return m.handleFormKeys(msg)
 		}
 		return m.handleListKeys(msg)
 	}
 
-	if m.mode == addMode {
+	if m.mode != listMode {
 		return m.updateInputs(msg)
 	}
 
@@ -78,10 +75,7 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.focusListPane(resultsPaneFocus)
 		return m, nil
-	case "tab":
-		m.focusPromptInput()
-		return m, nil
-	case "up", "k", "w", "down", "j", "s", "a", "e", "enter":
+	case "up", "k", "w", "down", "j", "s", "a", "e", "o", "enter":
 		if m.running {
 			m.setStatus(statusWarning, m.tr("检测进行中，请等待完成后再切换或操作。", "Checks are still running. Wait for completion before changing providers."))
 			return m, nil
@@ -107,6 +101,8 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.enterEditMode(m.cursor)
+	case "o":
+		m.enterRequestSettingsMode()
 	case "enter":
 		if len(m.config.Providers) == 0 {
 			m.setStatus(statusWarning, m.tr("请先新增至少一个供应商后再检测。", "Add at least one provider before running checks."))
@@ -148,8 +144,20 @@ func (m appModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cycleFocus(msg.String())
 		return m, nil
 	case "ctrl+s":
+		if m.mode == requestSettingsMode {
+			return m.submitRequestSettingsForm()
+		}
 		return m.submitProviderForm()
+	case "left", "right":
+		if m.mode == requestSettingsMode && m.focusIndex == requestSettingsModeField {
+			m.toggleRequestMode()
+			return m, nil
+		}
 	case "enter":
+		if m.mode == requestSettingsMode && m.focusIndex == requestSettingsModeField {
+			m.toggleRequestMode()
+			return m, nil
+		}
 		return m.updateInputs(msg)
 	}
 
@@ -177,18 +185,6 @@ func (m appModel) submitProviderForm() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m appModel) handlePromptKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "tab", "esc", "enter":
-		m.blurPromptInput()
-		return m, nil
-	}
-
-	var cmd tea.Cmd
-	m.promptInput, cmd = m.promptInput.Update(msg)
-	return m, cmd
-}
-
 func (m *appModel) finishRun(results []modelResult) {
 	m.running = false
 	m.results = results
@@ -210,7 +206,6 @@ func (m *appModel) finishRun(results []modelResult) {
 }
 
 func (m *appModel) enterAddMode() {
-	m.blurPromptInput()
 	m.mode = addMode
 	m.resetForm()
 	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
@@ -223,7 +218,6 @@ func (m *appModel) enterEditMode(index int) {
 		return
 	}
 
-	m.blurPromptInput()
 	m.mode = addMode
 	m.editingIndex = index
 	m.preloadForm(m.config.Providers[index])
@@ -233,6 +227,7 @@ func (m *appModel) enterEditMode(index int) {
 
 func (m *appModel) cancelFormMode() {
 	wasEditing := m.isEditingProvider()
+	wasRequestSettings := m.mode == requestSettingsMode
 	m.mode = listMode
 	m.resetForm()
 	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
@@ -240,7 +235,51 @@ func (m *appModel) cancelFormMode() {
 		m.setStatus(statusInfo, m.tr("已取消编辑供应商。", "Canceled editing provider."))
 		return
 	}
+	if wasRequestSettings {
+		m.preloadRequestSettingsForm(m.config.RequestSettings)
+		m.setStatus(statusInfo, m.tr("已取消请求设置编辑。", "Canceled request settings edit."))
+		return
+	}
 	m.setStatus(statusInfo, m.tr("已取消新增供应商。", "Canceled adding provider."))
+}
+
+func (m *appModel) enterRequestSettingsMode() {
+	m.mode = requestSettingsMode
+	m.editingIndex = noEditingProviderIndex
+	m.preloadRequestSettingsForm(m.config.RequestSettings)
+	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
+	m.setStatus(statusInfo, m.tr("请求设置：修改提示词、超时、请求方式与重试次数；按 Ctrl+S 保存，Esc 取消。", "Request settings: update the prompt, timeout, request mode, and retries; press Ctrl+S to save, or Esc to cancel."))
+}
+
+func (m appModel) submitRequestSettingsForm() (tea.Model, tea.Cmd) {
+	settings, err := m.buildRequestSettingsFromInputs()
+	if err != nil {
+		m.setStatus(statusError, err.Error())
+		return m, nil
+	}
+	previous := m.config.RequestSettings
+	m.config.RequestSettings = settings
+	if err := saveConfig(m.configPath, m.config); err != nil {
+		m.config.RequestSettings = previous
+		m.setStatus(statusError, fmt.Sprintf(m.tr("保存请求设置失败：%v", "Save request settings failed: %v"), err))
+		return m, nil
+	}
+	m.mode = listMode
+	m.preloadRequestSettingsForm(settings)
+	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
+	m.setStatus(statusSuccess, m.tr("已保存请求设置。", "Saved request settings."))
+	return m, nil
+}
+
+func (m *appModel) toggleRequestMode() {
+	if m.requestMode == requestModeResponses {
+		m.requestMode = requestModeCompatible
+	} else {
+		m.requestMode = requestModeResponses
+	}
+	if m.mode == requestSettingsMode {
+		m.syncFormPaneScroll()
+	}
 }
 
 func (m *appModel) startChecks() tea.Cmd {
@@ -254,19 +293,7 @@ func (m *appModel) startChecks() tea.Cmd {
 	} else {
 		m.setStatus(statusLoading, fmt.Sprintf("正在检测 %s 的 %d 个模型（并发 %d）...", selected.BaseURL, len(selected.Models), m.concurrency))
 	}
-	return runChecksCmd(selected, m.promptInput.Value(), m.concurrency)
-}
-
-func (m *appModel) focusPromptInput() {
-	m.promptEditing = true
-	m.promptInput.Focus()
-	m.syncVisiblePaneScrolls()
-}
-
-func (m *appModel) blurPromptInput() {
-	m.promptEditing = false
-	m.promptInput.Blur()
-	m.syncVisiblePaneScrolls()
+	return runChecksCmd(selected, normalizeRequestSettings(m.config.RequestSettings), m.concurrency)
 }
 
 func (m *appModel) buildProviderFromInputs() (provider, error) {
@@ -284,6 +311,52 @@ func (m *appModel) buildProviderFromInputs() (provider, error) {
 		APIKey:  strings.TrimSpace(m.apiKeyInput.Value()),
 		Models:  models,
 	}, nil
+}
+
+func (m *appModel) buildRequestSettingsFromInputs() (requestSettings, error) {
+	prompt := strings.TrimSpace(m.requestPromptInput.Value())
+	if prompt == "" {
+		return requestSettings{}, errors.New(m.tr("请求提示词不能为空。", "Request prompt cannot be empty."))
+	}
+
+	timeoutSeconds, err := parsePositiveInt(m.requestTimeoutInput.Value())
+	if err != nil {
+		return requestSettings{}, fmt.Errorf(m.tr("超时时间无效：%v", "Invalid timeout: %v"), err)
+	}
+
+	retryCount, err := parseNonNegativeInt(m.requestRetryInput.Value())
+	if err != nil {
+		return requestSettings{}, fmt.Errorf(m.tr("重试次数无效：%v", "Invalid retry count: %v"), err)
+	}
+
+	return normalizeRequestSettings(requestSettings{
+		Prompt:         prompt,
+		TimeoutSeconds: timeoutSeconds,
+		Mode:           m.requestMode,
+		RetryCount:     retryCount,
+	}), nil
+}
+
+func parsePositiveInt(raw string) (int, error) {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, errors.New("must be a whole number")
+	}
+	if value <= 0 {
+		return 0, errors.New("must be greater than 0")
+	}
+	return value, nil
+}
+
+func parseNonNegativeInt(raw string) (int, error) {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, errors.New("must be a whole number")
+	}
+	if value < 0 {
+		return 0, errors.New("must be 0 or greater")
+	}
+	return value, nil
 }
 
 func (m appModel) formSaveSuccessStatus(provider provider) string {

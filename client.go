@@ -20,8 +20,6 @@ import (
 
 const juicyPrompt = "你的juicy number是多少？直接回答数字"
 
-const retryOnZeroOrInvalidCount = 5
-
 var numberPattern = regexp.MustCompile(`[-+]?\d+(?:\.\d+)?`)
 
 type chatCompletionRequest struct {
@@ -36,6 +34,11 @@ type chatCompletionRequest struct {
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+
+type responsesRequest struct {
+	Model string        `json:"model"`
+	Input []chatMessage `json:"input"`
 }
 
 type chatCompletionResponse struct {
@@ -60,6 +63,24 @@ type contentPart struct {
 	Content string `json:"content"`
 }
 
+type responsesResponse struct {
+	Output []responsesOutputItem `json:"output"`
+	Error  *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+type responsesOutputItem struct {
+	Type    string                 `json:"type"`
+	Role    string                 `json:"role"`
+	Content []responsesContentPart `json:"content"`
+}
+
+type responsesContentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
 type attemptOutcome struct {
 	value      float64
 	formatted  string
@@ -68,7 +89,8 @@ type attemptOutcome struct {
 	hasNumeric bool
 }
 
-func runJuicyChecks(ctx context.Context, selected provider, prompt string, concurrency int) []modelResult {
+func runJuicyChecks(ctx context.Context, selected provider, settings requestSettings, concurrency int) []modelResult {
+	settings = normalizeRequestSettings(settings)
 	if concurrency < 1 {
 		concurrency = 1
 	}
@@ -85,7 +107,7 @@ func runJuicyChecks(ctx context.Context, selected provider, prompt string, concu
 
 	jobs := make(chan int)
 	httpClient := &http.Client{
-		Timeout: 45 * time.Second,
+		Timeout: time.Duration(settings.TimeoutSeconds) * time.Second,
 		Transport: &http.Transport{
 			MaxConnsPerHost:     workerCount,
 			MaxIdleConns:        workerCount * 2,
@@ -100,7 +122,7 @@ func runJuicyChecks(ctx context.Context, selected provider, prompt string, concu
 			defer wg.Done()
 			for index := range jobs {
 				modelName := selected.Models[index]
-				results[index] = checkModel(ctx, httpClient, selected, modelName, prompt)
+				results[index] = checkModel(ctx, httpClient, selected, modelName, settings)
 			}
 		}()
 	}
@@ -114,9 +136,10 @@ func runJuicyChecks(ctx context.Context, selected provider, prompt string, concu
 	return results
 }
 
-func checkModel(ctx context.Context, httpClient *http.Client, selected provider, modelName, prompt string) modelResult {
+func checkModel(ctx context.Context, httpClient *http.Client, selected provider, modelName string, settings requestSettings) modelResult {
+	settings = normalizeRequestSettings(settings)
 	result := modelResult{Model: modelName}
-	initial := runSingleAttempt(ctx, httpClient, selected, modelName, prompt)
+	initial := runSingleAttempt(ctx, httpClient, selected, modelName, settings)
 	if !initial.retryable {
 		if initial.hasNumeric {
 			result.Value = initial.formatted
@@ -135,8 +158,8 @@ func checkModel(ctx context.Context, httpClient *http.Client, selected provider,
 		bestFormatted = initial.formatted
 	}
 
-	for attempt := 0; attempt < retryOnZeroOrInvalidCount; attempt++ {
-		outcome := runSingleAttempt(ctx, httpClient, selected, modelName, prompt)
+	for attempt := 0; attempt < settings.RetryCount; attempt++ {
+		outcome := runSingleAttempt(ctx, httpClient, selected, modelName, settings)
 		if outcome.hasNumeric && outcome.value > bestValue {
 			bestValue = outcome.value
 			bestFormatted = outcome.formatted
@@ -152,29 +175,20 @@ func checkModel(ctx context.Context, httpClient *http.Client, selected provider,
 	}
 
 	if strings.TrimSpace(lastError) == "" {
-		lastError = fmt.Sprintf("no numeric value found after %d attempts", retryOnZeroOrInvalidCount+1)
+		lastError = fmt.Sprintf("no numeric value found after %d attempts", settings.RetryCount+1)
 	}
 	result.Error = lastError
 	return result
 }
 
-func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected provider, modelName, prompt string) attemptOutcome {
-
-	body, err := json.Marshal(chatCompletionRequest{
-		Model: modelName,
-		Messages: []chatMessage{{
-			Role:    "user",
-			Content: prompt,
-		}},
-		Temperature: 0,
-		MaxTokens:   32,
-		Stream:      false,
-	})
+func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected provider, modelName string, settings requestSettings) attemptOutcome {
+	settings = normalizeRequestSettings(settings)
+	body, err := buildRequestBody(modelName, settings)
 	if err != nil {
 		return attemptOutcome{errorMsg: fmt.Sprintf("marshal request: %v", err)}
 	}
 
-	requestURL := buildChatCompletionURL(selected.BaseURL)
+	requestURL := buildRequestURL(selected.BaseURL, settings.Mode)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return attemptOutcome{errorMsg: fmt.Sprintf("create request: %v", err)}
@@ -197,19 +211,18 @@ func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected pro
 	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		var parsed chatCompletionResponse
+		var parsed struct {
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
 		if err := json.Unmarshal(responseBody, &parsed); err != nil {
 			return attemptOutcome{errorMsg: buildAPIError(resp.StatusCode, nil, responseBody)}
 		}
 		return attemptOutcome{errorMsg: buildAPIError(resp.StatusCode, parsed.Error, responseBody)}
 	}
 
-	var parsed chatCompletionResponse
-	if err := json.Unmarshal(responseBody, &parsed); err != nil {
-		return attemptOutcome{errorMsg: fmt.Sprintf("decode response: %v", err)}
-	}
-
-	text, err := extractAssistantText(parsed)
+	text, err := extractResponseText(responseBody, settings.Mode)
 	if err != nil {
 		return attemptOutcome{errorMsg: err.Error(), retryable: true}
 	}
@@ -223,7 +236,7 @@ func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected pro
 		return attemptOutcome{
 			value:      value,
 			formatted:  formatted,
-			errorMsg:   fmt.Sprintf("model returned 0; retried %d times", retryOnZeroOrInvalidCount),
+			errorMsg:   fmt.Sprintf("model returned 0; retried %d times", settings.RetryCount),
 			retryable:  true,
 			hasNumeric: true,
 		}
@@ -232,32 +245,86 @@ func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected pro
 	return attemptOutcome{value: value, formatted: formatted, hasNumeric: true}
 }
 
+func buildRequestBody(modelName string, settings requestSettings) ([]byte, error) {
+	if settings.Mode == requestModeResponses {
+		return json.Marshal(responsesRequest{
+			Model: modelName,
+			Input: []chatMessage{{
+				Role:    "user",
+				Content: settings.Prompt,
+			}},
+		})
+	}
+
+	return json.Marshal(chatCompletionRequest{
+		Model: modelName,
+		Messages: []chatMessage{{
+			Role:    "user",
+			Content: settings.Prompt,
+		}},
+		Temperature: 0,
+		MaxTokens:   32,
+		Stream:      false,
+	})
+}
+
+func buildRequestURL(baseURL string, mode requestMode) string {
+	if mode == requestModeResponses {
+		return buildResponsesURL(baseURL)
+	}
+	return buildChatCompletionURL(baseURL)
+}
+
 func buildChatCompletionURL(baseURL string) string {
+	return buildAPIURL(baseURL, "chat/completions")
+}
+
+func buildResponsesURL(baseURL string) string {
+	return buildAPIURL(baseURL, "responses")
+}
+
+func buildAPIURL(baseURL, endpoint string) string {
 	trimmed := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		if strings.HasSuffix(trimmed, "/chat/completions") {
-			return trimmed
-		}
-		return trimmed + "/chat/completions"
+		return fallbackAPIURL(trimmed, endpoint)
 	}
 
-	if strings.HasSuffix(parsed.Path, "/chat/completions") {
+	if strings.HasSuffix(parsed.Path, "/"+endpoint) {
 		return parsed.String()
 	}
-
-	joinedPath := pathpkg.Join(parsed.Path, "chat/completions")
-	if !strings.HasPrefix(joinedPath, "/") {
-		joinedPath = "/" + joinedPath
-	}
-	parsed.Path = joinedPath
+	parsed.Path = swapEndpointPath(parsed.Path, endpoint)
 	parsed.RawPath = ""
 
 	if parsed.Scheme == "" && parsed.Host == "" {
-		return trimmed
+		return fallbackAPIURL(trimmed, endpoint)
 	}
 
 	return parsed.String()
+}
+
+func swapEndpointPath(path, endpoint string) string {
+	for _, candidate := range []string{"/chat/completions", "/responses"} {
+		if strings.HasSuffix(path, candidate) {
+			path = strings.TrimSuffix(path, candidate)
+			break
+		}
+	}
+
+	joinedPath := pathpkg.Join(path, endpoint)
+	if !strings.HasPrefix(joinedPath, "/") {
+		joinedPath = "/" + joinedPath
+	}
+	return joinedPath
+}
+
+func fallbackAPIURL(trimmed, endpoint string) string {
+	for _, candidate := range []string{"/chat/completions", "/responses"} {
+		if strings.HasSuffix(trimmed, candidate) {
+			return strings.TrimSuffix(trimmed, candidate) + "/" + endpoint
+		}
+	}
+	return trimmed + "/" + endpoint
 }
 
 func buildAPIError(statusCode int, apiErr *struct {
@@ -321,6 +388,44 @@ func extractAssistantText(response chatCompletionResponse) (string, error) {
 	}
 
 	return strings.Join(chunks, "\n"), nil
+}
+
+func extractResponsesText(response responsesResponse) (string, error) {
+	chunks := make([]string, 0)
+	for _, output := range response.Output {
+		if output.Type != "message" || output.Role != "assistant" {
+			continue
+		}
+		for _, part := range output.Content {
+			if part.Type != "output_text" {
+				continue
+			}
+			text := strings.TrimSpace(part.Text)
+			if text != "" {
+				chunks = append(chunks, text)
+			}
+		}
+	}
+	if len(chunks) == 0 {
+		return "", errors.New("response content did not contain text")
+	}
+	return strings.Join(chunks, "\n"), nil
+}
+
+func extractResponseText(body []byte, mode requestMode) (string, error) {
+	if mode == requestModeResponses {
+		var parsed responsesResponse
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return "", fmt.Errorf("decode response: %w", err)
+		}
+		return extractResponsesText(parsed)
+	}
+
+	var parsed chatCompletionResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	return extractAssistantText(parsed)
 }
 
 func parseNumericValue(text string) (float64, string, error) {

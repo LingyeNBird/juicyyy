@@ -28,6 +28,9 @@ func TestLoadConfigEmptyFileReturnsEmptyConfig(t *testing.T) {
 	if len(cfg.Providers) != 0 {
 		t.Fatalf("expected no providers, got %d", len(cfg.Providers))
 	}
+	if cfg.RequestSettings != defaultRequestSettings() {
+		t.Fatalf("expected default request settings, got %+v", cfg.RequestSettings)
+	}
 }
 
 func TestLoadConfigNormalizesBaseURLAndModels(t *testing.T) {
@@ -105,6 +108,30 @@ func TestSaveConfigWritesIndentedJSONWithTrailingNewline(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(path)); err != nil {
 		t.Fatalf("expected parent directory to exist: %v", err)
+	}
+}
+
+func TestSaveConfigPersistsRequestSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "request-settings.json")
+	cfg := appConfig{
+		RequestSettings: requestSettings{
+			Prompt:         "edited juicy prompt",
+			TimeoutSeconds: 240,
+			Mode:           requestModeResponses,
+			RetryCount:     2,
+		},
+	}
+
+	if err := saveConfig(path, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	loaded, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if loaded.RequestSettings != cfg.RequestSettings {
+		t.Fatalf("unexpected request settings: got %+v want %+v", loaded.RequestSettings, cfg.RequestSettings)
 	}
 }
 

@@ -39,6 +39,33 @@ var formFields = []formFieldSpec{
 	},
 }
 
+var requestSettingsFields = []formFieldSpec{
+	{
+		label:       localizedText{zh: "请求提示词", en: "Request Prompt"},
+		placeholder: localizedText{zh: "输入发送给模型的提示词", en: "Enter the prompt sent to the model"},
+		helper:      localizedText{zh: "检测时会将这段文本直接作为用户请求发送。", en: "This text is sent directly as the user request during checks."},
+		kind:        inputKindText,
+	},
+	{
+		label:       localizedText{zh: "超时时间(s)", en: "Timeout (s)"},
+		placeholder: localizedText{zh: "180", en: "180"},
+		helper:      localizedText{zh: "单次 HTTP 请求超时，默认 180 秒。", en: "Per-request HTTP timeout in seconds; defaults to 180."},
+		kind:        inputKindText,
+	},
+	{
+		label:       localizedText{zh: "请求方式", en: "Request Mode"},
+		placeholder: localizedText{zh: "", en: ""},
+		helper:      localizedText{zh: "在 ChatGPT Responses API 和 OpenAI 兼容 /chat/completions 之间切换。", en: "Switch between ChatGPT Responses API and OpenAI-compatible /chat/completions."},
+		kind:        inputKindText,
+	},
+	{
+		label:       localizedText{zh: "重试次数", en: "Retries"},
+		placeholder: localizedText{zh: "5", en: "5"},
+		helper:      localizedText{zh: "当结果为 0 或非数字时额外重试的次数。", en: "Extra retry attempts when the result is 0 or non-numeric."},
+		kind:        inputKindText,
+	},
+}
+
 func (t localizedText) forLang(lang appLanguage) string {
 	if lang == langEN {
 		return t.en
@@ -55,6 +82,7 @@ func (m appModel) tr(zh, en string) string {
 
 func (m *appModel) applyPlaceholders() {
 	applyFormLocale(&m.baseURLInput, &m.apiKeyInput, &m.modelsInput, m.lang, m.activeFormPaneWidth())
+	applyRequestSettingsLocale(&m.requestPromptInput, &m.requestTimeoutInput, &m.requestRetryInput, m.lang, m.activeFormPaneWidth())
 }
 
 func applyFormLocale(baseURLInput, apiKeyInput *textinput.Model, modelsInput *textarea.Model, lang appLanguage, paneWidth int) {
@@ -63,6 +91,13 @@ func applyFormLocale(baseURLInput, apiKeyInput *textinput.Model, modelsInput *te
 	applyTextInputLocale(apiKeyInput, formFields[addProviderAPIKeyField], lang, inputWidth)
 	applyTextareaLocale(modelsInput, formFields[addProviderModelsField], lang)
 	syncModelsInputLayout(modelsInput, paneWidth)
+}
+
+func applyRequestSettingsLocale(promptInput, timeoutInput, retryInput *textinput.Model, lang appLanguage, paneWidth int) {
+	inputWidth := inputWidthForFormPane(paneWidth)
+	applyTextInputLocale(promptInput, requestSettingsFields[requestSettingsPromptField], lang, inputWidth)
+	applyTextInputLocale(timeoutInput, requestSettingsFields[requestSettingsTimeoutField], lang, inputWidth)
+	applyTextInputLocale(retryInput, requestSettingsFields[requestSettingsRetryField], lang, inputWidth)
 }
 
 func applyTextInputLocale(input *textinput.Model, field formFieldSpec, lang appLanguage, inputWidth int) {

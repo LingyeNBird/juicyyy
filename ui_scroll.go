@@ -98,7 +98,7 @@ func (m *appModel) syncResultsPaneScroll() {
 
 func (m *appModel) syncVisiblePaneScrolls() {
 	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
-	if m.mode == addMode {
+	if m.mode != listMode {
 		m.syncFormPaneScroll()
 		return
 	}
@@ -106,7 +106,7 @@ func (m *appModel) syncVisiblePaneScrolls() {
 }
 
 func (m appModel) currentSplitPaneBottomContent() string {
-	if m.mode == addMode {
+	if m.mode != listMode {
 		return m.formBottomContent()
 	}
 	return m.listBottomContent()
@@ -138,7 +138,7 @@ func clampPaneScrollOffset(layout paneContentLayout, visibleHeight, offset int) 
 }
 
 func (m appModel) listPaneBounds() (providerBounds, resultsBounds paneBounds) {
-	header := m.renderPageHeaderWithPrompt()
+	header := m.pageHeader()
 	paneWidth := listPaneWidth(m.width)
 	bodyTop := lipgloss.Height(header) + 1
 	bodyHeight := m.availableListBodyHeight(header, m.listBottomContent())

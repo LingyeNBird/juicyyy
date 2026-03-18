@@ -53,11 +53,20 @@ const (
 	noEditingProviderIndex = -1
 )
 
+const (
+	requestSettingsPromptField = iota
+	requestSettingsTimeoutField
+	requestSettingsModeField
+	requestSettingsRetryField
+	requestSettingsFieldCount
+)
+
 type viewMode int
 
 const (
 	listMode viewMode = iota
 	addMode
+	requestSettingsMode
 )
 
 type listPaneFocus int
@@ -73,8 +82,10 @@ type appModel struct {
 	lang                     appLanguage
 	mode                     viewMode
 	editingIndex             int
-	promptInput              textinput.Model
-	promptEditing            bool
+	requestPromptInput       textinput.Model
+	requestTimeoutInput      textinput.Model
+	requestRetryInput        textinput.Model
+	requestMode              requestMode
 	listPaneFocus            listPaneFocus
 	cursor                   int
 	activeResult             int
@@ -100,21 +111,25 @@ func newModel(cfg appConfig, configPath string) appModel {
 	spin.Spinner = spinner.Line
 	spin.Style = loadingStyle
 
+	cfg = normalizeConfig(cfg)
 	baseURLInput, apiKeyInput, modelsInput := newProviderInputs(langZH)
-	promptInput := newPromptInput()
+	requestPromptInput, requestTimeoutInput, requestRetryInput := newRequestSettingsInputs(langZH, cfg.RequestSettings)
 	m := appModel{
-		config:        cfg,
-		configPath:    configPath,
-		lang:          langZH,
-		mode:          listMode,
-		editingIndex:  noEditingProviderIndex,
-		promptInput:   promptInput,
-		listPaneFocus: providerPaneFocus,
-		baseURLInput:  baseURLInput,
-		apiKeyInput:   apiKeyInput,
-		modelsInput:   modelsInput,
-		spinner:       spin,
-		concurrency:   5,
+		config:              cfg,
+		configPath:          configPath,
+		lang:                langZH,
+		mode:                listMode,
+		editingIndex:        noEditingProviderIndex,
+		requestPromptInput:  requestPromptInput,
+		requestTimeoutInput: requestTimeoutInput,
+		requestRetryInput:   requestRetryInput,
+		requestMode:         cfg.RequestSettings.Mode,
+		listPaneFocus:       providerPaneFocus,
+		baseURLInput:        baseURLInput,
+		apiKeyInput:         apiKeyInput,
+		modelsInput:         modelsInput,
+		spinner:             spin,
+		concurrency:         5,
 	}
 	m.setStatus(statusInfo, fmt.Sprintf("配置文件：%s", configPath))
 	return m
@@ -163,7 +178,7 @@ func modelsInputHeightForValue(value string, paneWidth int) int {
 }
 
 func (m appModel) activeFormPaneWidth() int {
-	if m.mode == addMode {
+	if m.mode != listMode {
 		return listPaneWidth(m.width)
 	}
 	return formPaneWidth(m.width)
@@ -174,11 +189,15 @@ func (m appModel) formPaneVisibleContentHeight() int {
 }
 
 func (m appModel) splitPaneVisibleContentHeight(bottomContent string) int {
-	return maxInt(0, m.availableListBodyHeight(m.renderPageHeaderWithPrompt(), bottomContent)-paneVerticalChrome)
+	return maxInt(0, m.availableListBodyHeight(m.pageHeader(), bottomContent)-paneVerticalChrome)
 }
 
 func (m appModel) isEditingProvider() bool {
 	return m.editingIndex >= 0 && m.editingIndex < len(m.config.Providers)
+}
+
+func (m appModel) pageHeader() string {
+	return m.renderPageHeader(m.tr("Juicy 批量检测器", "Juicy Batch Checker"), "")
 }
 
 func wrappedVisibleRowCount(value string, width int) int {
@@ -258,8 +277,4 @@ func wrapTextareaLine(runes []rune, width int) [][]rune {
 
 func repeatedSpaces(n int) []rune {
 	return []rune(strings.Repeat(" ", n))
-}
-
-func promptInputWidth(totalWidth int, label string) int {
-	return maxInt(minInputWidth, totalWidth-layoutOuterPadding-lipgloss.Width(label)-1)
 }

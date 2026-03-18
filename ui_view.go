@@ -16,6 +16,7 @@ var (
 	defaultPaneBorderColor     = lipgloss.Color("177")
 	resultsPaneBorderColor     = lipgloss.Color("214")
 	addProviderPaneBorderColor = lipgloss.Color("78")
+	requestPaneBorderColor     = lipgloss.Color("203")
 
 	pageTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("153")).Padding(0, 1)
 	fieldLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
@@ -46,7 +47,7 @@ type splitPane struct {
 }
 
 func (m appModel) View() string {
-	if m.mode == addMode {
+	if m.mode != listMode {
 		return m.formView()
 	}
 	return m.listView()
@@ -74,7 +75,7 @@ func (m appModel) listView() string {
 }
 
 func (m appModel) renderSplitView(leftPane, rightPane splitPane, bottomContent string) string {
-	header := m.renderPageHeaderWithPrompt()
+	header := m.pageHeader()
 	paneWidth := listPaneWidth(m.width)
 	bodyHeight := m.availableListBodyHeight(header, bottomContent)
 	providerPane := renderScrollableTitledPaneWithHeight(
@@ -104,16 +105,9 @@ func (m appModel) renderSplitView(leftPane, rightPane splitPane, bottomContent s
 }
 
 func (m appModel) listBottomContent() string {
-	if m.promptEditing {
-		return lipgloss.JoinVertical(lipgloss.Left,
-			m.statusLine(),
-			renderShortcutFooter(m.tr("快捷键：Tab/Esc 完成提示词编辑 | Enter 应用提示词", "Keys: tab/esc finish prompt edit | enter apply prompt")),
-		)
-	}
-
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.statusLine(),
-		renderShortcutFooter(m.tr("快捷键：Tab 编辑提示词 | p 聚焦供应商栏 | r 聚焦结果栏 | j/k/w/s/↑/↓ 切换供应商 | a 新增供应商 | e 编辑供应商 | Enter 开始检测 | l 切换中英 | q 退出", "Keys: tab edit prompt | p focus providers | r focus results | j/k/w/s/up/down move providers | a add provider | e edit provider | enter run checks | l toggle lang | q quit")),
+		renderShortcutFooter(m.tr("快捷键：p 聚焦供应商栏 | r 聚焦结果栏 | j/k/w/s/↑/↓ 切换供应商 | a 新增供应商 | e 编辑供应商 | o 请求设置 | Enter 开始检测 | l 切换中英 | q 退出", "Keys: p focus providers | r focus results | j/k/w/s/up/down move providers | a add provider | e edit provider | o request settings | enter run checks | l toggle lang | q quit")),
 	)
 }
 
@@ -128,7 +122,7 @@ func (m appModel) formView() string {
 		title:          m.formPaneTitle(),
 		body:           m.formPaneBody(),
 		viewportOffset: m.formPaneScrollOffset,
-		borderColor:    addProviderPaneBorderColor,
+		borderColor:    m.formPaneBorderColor(),
 	}
 
 	return m.renderSplitView(
@@ -143,6 +137,17 @@ func (m appModel) formPaneBody() string {
 }
 
 func (m appModel) formPaneSections(paneWidth int) []string {
+	if m.mode == requestSettingsMode {
+		applyRequestSettingsLocale(&m.requestPromptInput, &m.requestTimeoutInput, &m.requestRetryInput, m.lang, paneWidth)
+		return []string{
+			helperTextStyle.Render(m.formIntroText()),
+			m.renderFormField(requestSettingsFields[requestSettingsPromptField], m.requestPromptInput.View()),
+			m.renderFormField(requestSettingsFields[requestSettingsTimeoutField], m.requestTimeoutInput.View()),
+			m.renderFormField(requestSettingsFields[requestSettingsModeField], m.requestModeInputView()),
+			m.renderFormField(requestSettingsFields[requestSettingsRetryField], m.requestRetryInput.View()),
+		}
+	}
+
 	applyFormLocale(&m.baseURLInput, &m.apiKeyInput, &m.modelsInput, m.lang, paneWidth)
 	syncModelsInputLayout(&m.modelsInput, paneWidth)
 
@@ -168,7 +173,11 @@ func (m appModel) formPaneLayout() paneContentLayout {
 	}
 
 	activeCursorRow := -1
-	if m.focusIndex >= addProviderBaseURLField && m.focusIndex < addProviderFieldCount && len(wrappedLines) > 0 {
+	fieldCount := addProviderFieldCount
+	if m.mode == requestSettingsMode {
+		fieldCount = requestSettingsFieldCount
+	}
+	if m.focusIndex >= 0 && m.focusIndex < fieldCount && len(wrappedLines) > 0 {
 		activeCursorRow = maxInt(0, minInt(m.activeFormCursorRow(paneWidth), len(wrappedLines)-1))
 	}
 
@@ -295,6 +304,9 @@ func (m appModel) formBottomContent() string {
 }
 
 func (m appModel) formPaneTitle() string {
+	if m.mode == requestSettingsMode {
+		return m.tr("请求设置", "Request Settings")
+	}
 	if m.isEditingProvider() {
 		return m.tr("编辑供应商", "Edit Provider")
 	}
@@ -320,6 +332,9 @@ func (m appModel) listPaneBorderColor(focus listPaneFocus) lipgloss.Color {
 }
 
 func (m appModel) formIntroText() string {
+	if m.mode == requestSettingsMode {
+		return m.tr("统一管理检测请求的提示词、超时时间、接口模式和重试次数。", "Manage the prompt, timeout, API mode, and retry count used for juicy checks.")
+	}
 	if m.isEditingProvider() {
 		return m.tr("修改当前供应商的 OAI 兼容 base URL、API key，以及支持逗号或换行的模型列表。", "Update the selected provider's OAI-compatible base URL, API key, and models separated by commas or new lines.")
 	}
@@ -327,6 +342,9 @@ func (m appModel) formIntroText() string {
 }
 
 func (m appModel) formFooterText() string {
+	if m.mode == requestSettingsMode {
+		return m.tr("快捷键：tab/shift+tab 切换焦点 | ←/→/Enter 切换请求方式 | Ctrl+S 保存 | Esc 取消 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | left/right/enter switch request mode | ctrl+s save | esc cancel | ctrl+l toggle lang")
+	}
 	if m.isEditingProvider() {
 		return m.tr("快捷键：tab/shift+tab 切换焦点 | Ctrl+S 更新 | 模型框 Enter 换行 | Esc 取消编辑 | Ctrl+L 切换中英", "Keys: tab/shift+tab move | ctrl+s update | enter adds a new line in Models | esc cancel edit | ctrl+l toggle lang")
 	}
@@ -391,15 +409,6 @@ func (m appModel) renderPageHeader(title, subtitle string) string {
 		lines = append(lines, helperTextStyle.Render(subtitle))
 	}
 	return strings.Join(lines, "\n")
-}
-
-func (m appModel) renderPageHeaderWithPrompt() string {
-	title := m.renderPageHeader(m.tr("Juicy 批量检测器", "Juicy Batch Checker"), "")
-	label := fieldLabelStyle.Render(m.tr("提示词：", "Prompt:"))
-	promptInput := m.promptInput
-	promptInput.Width = promptInputWidth(m.width, m.tr("提示词：", "Prompt:"))
-	promptLine := lipgloss.JoinHorizontal(lipgloss.Center, label, " ", promptInput.View())
-	return lipgloss.JoinVertical(lipgloss.Left, title, promptLine)
 }
 
 func (m appModel) renderFormField(field formFieldSpec, inputView string) string {
@@ -605,6 +614,32 @@ func renderFieldLabel(label string) string {
 
 func renderEmptyState(text string) string {
 	return helperTextStyle.Render(text)
+}
+
+func (m appModel) requestModeInputView() string {
+	choices := []string{
+		m.renderRequestModeChoice(requestModeResponses, m.tr("chatgpt response", "chatgpt response")),
+		m.renderRequestModeChoice(requestModeCompatible, m.tr("chatgpt compatible", "chatgpt compatible")),
+	}
+	prefix := "  "
+	if m.focusIndex == requestSettingsModeField {
+		prefix = selectionStyle.Render("> ")
+	}
+	return prefix + strings.Join(choices, " / ")
+}
+
+func (m appModel) renderRequestModeChoice(mode requestMode, label string) string {
+	if m.requestMode == mode {
+		return selectionStyle.Render("[" + label + "]")
+	}
+	return mutedStyle.Render(label)
+}
+
+func (m appModel) formPaneBorderColor() lipgloss.Color {
+	if m.mode == requestSettingsMode {
+		return requestPaneBorderColor
+	}
+	return addProviderPaneBorderColor
 }
 
 func renderShortcutFooter(text string) string {
