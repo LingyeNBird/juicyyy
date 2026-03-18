@@ -307,6 +307,63 @@ func TestRunSingleAttemptOmitsAuthorizationHeaderWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestRunSingleAttemptOmitsAuthorizationHeaderWhenEnvAPIKeyExists(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "env-secret")
+	selected := provider{BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("expected empty authorization header, got %q", got)
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"14"}}]}`)
+	})}
+
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", testRequestSettings())
+	if !outcome.hasNumeric || outcome.formatted != "14" {
+		t.Fatalf("unexpected outcome: %+v", outcome)
+	}
+}
+
+func TestRunSingleAttemptPreservesQueryStringWithSDKBaseURL(t *testing.T) {
+	selected := provider{BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/openai/v1/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("api-version"); got != "2024-10-21" {
+			t.Fatalf("unexpected api-version query: %q", got)
+		}
+		if got := r.URL.Query().Get("tenant"); got != "demo" {
+			t.Fatalf("unexpected tenant query: %q", got)
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"15"}}]}`)
+	}) + "/openai/v1/responses?api-version=2024-10-21&tenant=demo"}
+
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", testRequestSettings())
+	if !outcome.hasNumeric || outcome.formatted != "15" {
+		t.Fatalf("unexpected outcome: %+v", outcome)
+	}
+}
+
+func TestRunSingleAttemptSupportsLegacyChatCompletionTextField(t *testing.T) {
+	selected := provider{BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"text":"16"}]}`)
+	})}
+
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", testRequestSettings())
+	if !outcome.hasNumeric || outcome.formatted != "16" {
+		t.Fatalf("unexpected outcome: %+v", outcome)
+	}
+}
+
+func TestRunSingleAttemptSupportsLegacyChatCompletionArrayContent(t *testing.T) {
+	selected := provider{BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":[{"type":"text","text":"22.5"}]}}]}`)
+	})}
+
+	outcome := runSingleAttempt(context.Background(), http.DefaultClient, selected, "demo-model", testRequestSettings())
+	if !outcome.hasNumeric || outcome.formatted != "22.5" {
+		t.Fatalf("unexpected outcome: %+v", outcome)
+	}
+}
+
 func TestRunSingleAttemptSupportsResponsesMode(t *testing.T) {
 	selected := provider{BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {

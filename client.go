@@ -16,6 +16,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	openairesponses "github.com/openai/openai-go/v3/responses"
 )
 
 const juicyPrompt = "你的juicy number是多少？直接回答数字"
@@ -183,48 +187,13 @@ func checkModel(ctx context.Context, httpClient *http.Client, selected provider,
 
 func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected provider, modelName string, settings requestSettings) attemptOutcome {
 	settings = normalizeRequestSettings(settings)
-	body, err := buildRequestBody(modelName, settings)
-	if err != nil {
-		return attemptOutcome{errorMsg: fmt.Sprintf("marshal request: %v", err)}
-	}
-
 	requestURL := buildRequestURL(selected.BaseURL, settings.Mode)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
+	capture := &responseCapture{}
+	sdkClient := newOpenAIClient(buildSDKClientOptions(requestURL, selected.APIKey, newCapturingHTTPClient(httpClient, capture))...)
+
+	text, err, retryable := requestModelText(ctx, sdkClient, capture, modelName, settings)
 	if err != nil {
-		return attemptOutcome{errorMsg: fmt.Sprintf("create request: %v", err)}
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if strings.TrimSpace(selected.APIKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(selected.APIKey))
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return attemptOutcome{errorMsg: fmt.Sprintf("request failed: %v", err)}
-	}
-	defer resp.Body.Close()
-
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return attemptOutcome{errorMsg: fmt.Sprintf("read response: %v", err)}
-	}
-
-	if resp.StatusCode >= http.StatusBadRequest {
-		var parsed struct {
-			Error *struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := json.Unmarshal(responseBody, &parsed); err != nil {
-			return attemptOutcome{errorMsg: buildAPIError(resp.StatusCode, nil, responseBody)}
-		}
-		return attemptOutcome{errorMsg: buildAPIError(resp.StatusCode, parsed.Error, responseBody)}
-	}
-
-	text, err := extractResponseText(responseBody, settings.Mode)
-	if err != nil {
-		return attemptOutcome{errorMsg: err.Error(), retryable: true}
+		return attemptOutcome{errorMsg: err.Error(), retryable: retryable}
 	}
 
 	value, formatted, err := parseNumericValue(text)
@@ -245,27 +214,191 @@ func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected pro
 	return attemptOutcome{value: value, formatted: formatted, hasNumeric: true}
 }
 
-func buildRequestBody(modelName string, settings requestSettings) ([]byte, error) {
-	if settings.Mode == requestModeResponses {
-		return json.Marshal(responsesRequest{
-			Model: modelName,
-			Input: []chatMessage{{
-				Role:    "user",
-				Content: settings.Prompt,
-			}},
-		})
+type responseCapture struct {
+	statusCode int
+	body       bytes.Buffer
+}
+
+func (c *responseCapture) bytes() []byte {
+	if c == nil {
+		return nil
+	}
+	return c.body.Bytes()
+}
+
+type responseCaptureTransport struct {
+	base    http.RoundTripper
+	capture *responseCapture
+}
+
+func (t responseCaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	if t.capture == nil {
+		return resp, nil
 	}
 
-	return json.Marshal(chatCompletionRequest{
-		Model: modelName,
-		Messages: []chatMessage{{
-			Role:    "user",
-			Content: settings.Prompt,
-		}},
-		Temperature: 0,
-		MaxTokens:   32,
-		Stream:      false,
-	})
+	t.capture.statusCode = resp.StatusCode
+	if resp.Body != nil {
+		resp.Body = &captureReadCloser{ReadCloser: resp.Body, buffer: &t.capture.body}
+	}
+	return resp, nil
+}
+
+type captureReadCloser struct {
+	io.ReadCloser
+	buffer *bytes.Buffer
+}
+
+func (r *captureReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 {
+		_, _ = r.buffer.Write(p[:n])
+	}
+	return n, err
+}
+
+func newCapturingHTTPClient(base *http.Client, capture *responseCapture) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
+
+	clone := *base
+	transport := base.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	clone.Transport = responseCaptureTransport{base: transport, capture: capture}
+	return &clone
+}
+
+func requestModelText(ctx context.Context, client openai.Client, capture *responseCapture, modelName string, settings requestSettings) (string, error, bool) {
+	if settings.Mode == requestModeResponses {
+		params := openairesponses.ResponseNewParams{
+			Model: openai.ResponsesModel(modelName),
+			Input: openairesponses.ResponseNewParamsInputUnion{
+				OfInputItemList: openairesponses.ResponseInputParam{
+					openairesponses.ResponseInputItemParamOfMessage(settings.Prompt, openairesponses.EasyInputMessageRoleUser),
+				},
+			},
+		}
+
+		response, err := client.Responses.New(ctx, params)
+		if err != nil {
+			return handleSDKRequestError(err, capture, settings.Mode)
+		}
+
+		text, textErr := extractSDKResponsesText(*response)
+		if textErr == nil {
+			return text, nil, false
+		}
+		if fallbackText, fallbackErr := extractFallbackResponseText(capture.bytes(), settings.Mode); fallbackErr == nil {
+			return fallbackText, nil, false
+		}
+		return "", textErr, true
+	}
+
+	params := openai.ChatCompletionNewParams{
+		Model: openai.ChatModel(modelName),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.UserMessage(settings.Prompt),
+		},
+		Temperature: openai.Float(0),
+		MaxTokens:   openai.Int(32),
+	}
+
+	completion, err := client.Chat.Completions.New(ctx, params)
+	if err != nil {
+		return handleSDKRequestError(err, capture, settings.Mode)
+	}
+
+	text, textErr := extractChatCompletionText(*completion)
+	if textErr == nil {
+		return text, nil, false
+	}
+	if fallbackText, fallbackErr := extractFallbackResponseText(capture.bytes(), settings.Mode); fallbackErr == nil {
+		return fallbackText, nil, false
+	}
+	return "", textErr, true
+}
+
+func handleSDKRequestError(err error, capture *responseCapture, mode requestMode) (string, error, bool) {
+	if capture != nil && capture.statusCode >= http.StatusBadRequest {
+		var apiErr *openai.Error
+		if errors.As(err, &apiErr) {
+			return "", errors.New(buildAPIError(apiErr.StatusCode, &struct {
+				Message string `json:"message"`
+			}{Message: apiErr.Message}, capture.bytes())), false
+		}
+		return "", errors.New(buildAPIError(capture.statusCode, nil, capture.bytes())), false
+	}
+
+	if capture != nil && len(capture.bytes()) > 0 {
+		if text, fallbackErr := extractFallbackResponseText(capture.bytes(), mode); fallbackErr == nil {
+			return text, nil, false
+		}
+		return "", fmt.Errorf("decode response: %v", err), true
+	}
+
+	return "", fmt.Errorf("request failed: %v", err), false
+}
+
+func newOpenAIClient(opts ...option.RequestOption) openai.Client {
+	return openai.Client{
+		Options:   opts,
+		Chat:      openai.NewChatService(opts...),
+		Responses: openairesponses.NewResponseService(opts...),
+	}
+}
+
+func buildSDKClientOptions(requestURL, apiKey string, httpClient *http.Client) []option.RequestOption {
+	baseURL, queryOptions := buildSDKBaseURL(requestURL)
+	trimmedAPIKey := strings.TrimSpace(apiKey)
+
+	opts := []option.RequestOption{
+		option.WithBaseURL(baseURL),
+		option.WithHTTPClient(httpClient),
+		option.WithMaxRetries(0),
+	}
+	if trimmedAPIKey != "" {
+		opts = append(opts, option.WithAPIKey(trimmedAPIKey))
+	}
+	return append(opts, queryOptions...)
+}
+
+func buildSDKBaseURL(requestURL string) (string, []option.RequestOption) {
+	parsed, err := url.Parse(requestURL)
+	if err != nil {
+		return requestURL, nil
+	}
+
+	queryOptions := make([]option.RequestOption, 0)
+	for key, values := range parsed.Query() {
+		for _, value := range values {
+			queryOptions = append(queryOptions, option.WithQueryAdd(key, value))
+		}
+	}
+
+	parsed.Path = stripEndpointPath(parsed.Path)
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	}
+
+	return parsed.String(), queryOptions
+}
+
+func stripEndpointPath(path string) string {
+	for _, candidate := range []string{"/chat/completions", "/responses"} {
+		if strings.HasSuffix(path, candidate) {
+			return strings.TrimSuffix(path, candidate)
+		}
+	}
+	return path
 }
 
 func buildRequestURL(baseURL string, mode requestMode) string {
@@ -345,6 +478,18 @@ func buildAPIError(statusCode int, apiErr *struct {
 	return fmt.Sprintf("API %d: %s", statusCode, trimmed)
 }
 
+func extractChatCompletionText(response openai.ChatCompletion) (string, error) {
+	if len(response.Choices) == 0 {
+		return "", errors.New("response has no choices")
+	}
+
+	text := strings.TrimSpace(response.Choices[0].Message.Content)
+	if text == "" {
+		return "", errors.New("response has empty message content")
+	}
+	return text, nil
+}
+
 func extractAssistantText(response chatCompletionResponse) (string, error) {
 	if len(response.Choices) == 0 {
 		return "", errors.New("response has no choices")
@@ -412,6 +557,28 @@ func extractResponsesText(response responsesResponse) (string, error) {
 	return strings.Join(chunks, "\n"), nil
 }
 
+func extractSDKResponsesText(response openairesponses.Response) (string, error) {
+	chunks := make([]string, 0)
+	for _, output := range response.Output {
+		if output.Type != "message" || output.Role != "assistant" {
+			continue
+		}
+		for _, part := range output.Content {
+			if part.Type != "output_text" {
+				continue
+			}
+			text := strings.TrimSpace(part.Text)
+			if text != "" {
+				chunks = append(chunks, text)
+			}
+		}
+	}
+	if len(chunks) == 0 {
+		return "", errors.New("response content did not contain text")
+	}
+	return strings.Join(chunks, "\n"), nil
+}
+
 func extractResponseText(body []byte, mode requestMode) (string, error) {
 	if mode == requestModeResponses {
 		var parsed responsesResponse
@@ -426,6 +593,13 @@ func extractResponseText(body []byte, mode requestMode) (string, error) {
 		return "", fmt.Errorf("decode response: %w", err)
 	}
 	return extractAssistantText(parsed)
+}
+
+func extractFallbackResponseText(body []byte, mode requestMode) (string, error) {
+	if len(body) == 0 {
+		return "", errors.New("response body was empty")
+	}
+	return extractResponseText(body, mode)
 }
 
 func parseNumericValue(text string) (float64, string, error) {
