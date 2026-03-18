@@ -10,7 +10,7 @@ import (
 )
 
 func (m appModel) Init() tea.Cmd {
-	return tea.DisableMouse
+	return tea.EnableMouseCellMotion
 }
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -20,6 +20,8 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.applyPlaceholders()
 		m.syncFormPaneScroll()
+		m.syncProviderPaneScroll(paneScrollDirectionNeutral)
+		m.syncResultsPaneScroll()
 		return m, nil
 	case spinner.TickMsg:
 		if !m.running {
@@ -30,6 +32,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case runFinishedMsg:
 		m.finishRun(msg.Results)
+		return m, nil
+	case tea.MouseMsg:
+		if m.mode == listMode {
+			return m.handleListMouse(msg)
+		}
 		return m, nil
 	case tea.KeyMsg:
 		key := msg.String()
@@ -60,13 +67,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	direction := paneScrollDirectionNeutral
+
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "p":
+		m.focusListPane(providerPaneFocus)
+		return m, nil
+	case "r":
+		m.focusListPane(resultsPaneFocus)
+		return m, nil
 	case "tab":
 		m.focusPromptInput()
 		return m, nil
-	case "up", "k", "down", "j", "a", "e", "enter":
+	case "up", "k", "w", "down", "j", "s", "a", "e", "enter":
 		if m.running {
 			m.setStatus(statusWarning, m.tr("检测进行中，请等待完成后再切换或操作。", "Checks are still running. Wait for completion before changing providers."))
 			return m, nil
@@ -74,13 +89,15 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "up", "k":
+	case "up", "k", "w":
 		if m.cursor > 0 {
 			m.cursor--
+			direction = paneScrollDirectionUp
 		}
-	case "down", "j":
+	case "down", "j", "s":
 		if m.cursor < len(m.config.Providers)-1 {
 			m.cursor++
+			direction = paneScrollDirectionDown
 		}
 	case "a":
 		m.enterAddMode()
@@ -96,6 +113,25 @@ func (m appModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Batch(m.spinner.Tick, m.startChecks())
+	}
+
+	m.syncProviderPaneScroll(direction)
+	return m, nil
+}
+
+func (m appModel) handleListMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch mouseEventKind(msg) {
+	case "left press", "left release":
+		providerBounds, resultsBounds := m.listPaneBounds()
+		if providerBounds.contains(msg.X, msg.Y) {
+			m.focusListPane(providerPaneFocus)
+		} else if resultsBounds.contains(msg.X, msg.Y) {
+			m.focusListPane(resultsPaneFocus)
+		}
+	case "wheel up":
+		m.scrollFocusedListPane(-1)
+	case "wheel down":
+		m.scrollFocusedListPane(1)
 	}
 
 	return m, nil
@@ -136,6 +172,7 @@ func (m appModel) submitProviderForm() (tea.Model, tea.Cmd) {
 	m.mode = listMode
 	m.cursor = savedIndex
 	m.resetForm()
+	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
 	m.setStatus(statusSuccess, successStatus)
 	return m, nil
 }
@@ -155,6 +192,8 @@ func (m appModel) handlePromptKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *appModel) finishRun(results []modelResult) {
 	m.running = false
 	m.results = results
+	m.activeResult = maxInt(0, len(results)-1)
+	m.syncResultsPaneScroll()
 	failures := 0
 	for _, result := range results {
 		if result.Error != "" {
@@ -174,6 +213,7 @@ func (m *appModel) enterAddMode() {
 	m.blurPromptInput()
 	m.mode = addMode
 	m.resetForm()
+	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
 	m.setStatus(statusInfo, m.tr("新增供应商：模型支持逗号或换行；按 Ctrl+S 保存，Esc 取消。", "Add a provider. Models accept commas or new lines; press Ctrl+S to save, or Esc to cancel."))
 }
 
@@ -187,6 +227,7 @@ func (m *appModel) enterEditMode(index int) {
 	m.mode = addMode
 	m.editingIndex = index
 	m.preloadForm(m.config.Providers[index])
+	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
 	m.setStatus(statusInfo, m.tr("编辑供应商：修改基础 URL、API 密钥和模型；按 Ctrl+S 更新，Esc 取消。", "Edit the selected provider. Update the base URL, API key, and models; press Ctrl+S to update, or Esc to cancel."))
 }
 
@@ -194,6 +235,7 @@ func (m *appModel) cancelFormMode() {
 	wasEditing := m.isEditingProvider()
 	m.mode = listMode
 	m.resetForm()
+	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
 	if wasEditing {
 		m.setStatus(statusInfo, m.tr("已取消编辑供应商。", "Canceled editing provider."))
 		return
@@ -205,6 +247,8 @@ func (m *appModel) startChecks() tea.Cmd {
 	selected := m.config.Providers[m.cursor]
 	m.running = true
 	m.results = nil
+	m.activeResult = 0
+	m.resultsPaneScrollOffset = 0
 	if m.lang == langEN {
 		m.setStatus(statusLoading, fmt.Sprintf("Checking %d model(s) from %s with concurrency %d...", len(selected.Models), selected.BaseURL, m.concurrency))
 	} else {
@@ -216,11 +260,13 @@ func (m *appModel) startChecks() tea.Cmd {
 func (m *appModel) focusPromptInput() {
 	m.promptEditing = true
 	m.promptInput.Focus()
+	m.syncVisiblePaneScrolls()
 }
 
 func (m *appModel) blurPromptInput() {
 	m.promptEditing = false
 	m.promptInput.Blur()
+	m.syncVisiblePaneScrolls()
 }
 
 func (m *appModel) buildProviderFromInputs() (provider, error) {

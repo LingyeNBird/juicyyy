@@ -60,29 +60,39 @@ const (
 	addMode
 )
 
+type listPaneFocus int
+
+const (
+	providerPaneFocus listPaneFocus = iota
+	resultsPaneFocus
+)
+
 type appModel struct {
-	config               appConfig
-	configPath           string
-	lang                 appLanguage
-	mode                 viewMode
-	editingIndex         int
-	promptInput          textinput.Model
-	promptEditing        bool
-	cursor               int
-	activeResult         int
-	baseURLInput         textinput.Model
-	apiKeyInput          textinput.Model
-	modelsInput          textarea.Model
-	focusIndex           int
-	formPaneScrollOffset int
-	width                int
-	height               int
-	status               string
-	statusKind           statusKind
-	results              []modelResult
-	running              bool
-	spinner              spinner.Model
-	concurrency          int
+	config                   appConfig
+	configPath               string
+	lang                     appLanguage
+	mode                     viewMode
+	editingIndex             int
+	promptInput              textinput.Model
+	promptEditing            bool
+	listPaneFocus            listPaneFocus
+	cursor                   int
+	activeResult             int
+	baseURLInput             textinput.Model
+	apiKeyInput              textinput.Model
+	modelsInput              textarea.Model
+	focusIndex               int
+	providerPaneScrollOffset int
+	formPaneScrollOffset     int
+	resultsPaneScrollOffset  int
+	width                    int
+	height                   int
+	status                   string
+	statusKind               statusKind
+	results                  []modelResult
+	running                  bool
+	spinner                  spinner.Model
+	concurrency              int
 }
 
 func newModel(cfg appConfig, configPath string) appModel {
@@ -93,17 +103,18 @@ func newModel(cfg appConfig, configPath string) appModel {
 	baseURLInput, apiKeyInput, modelsInput := newProviderInputs(langZH)
 	promptInput := newPromptInput()
 	m := appModel{
-		config:       cfg,
-		configPath:   configPath,
-		lang:         langZH,
-		mode:         listMode,
-		editingIndex: noEditingProviderIndex,
-		promptInput:  promptInput,
-		baseURLInput: baseURLInput,
-		apiKeyInput:  apiKeyInput,
-		modelsInput:  modelsInput,
-		spinner:      spin,
-		concurrency:  5,
+		config:        cfg,
+		configPath:    configPath,
+		lang:          langZH,
+		mode:          listMode,
+		editingIndex:  noEditingProviderIndex,
+		promptInput:   promptInput,
+		listPaneFocus: providerPaneFocus,
+		baseURLInput:  baseURLInput,
+		apiKeyInput:   apiKeyInput,
+		modelsInput:   modelsInput,
+		spinner:       spin,
+		concurrency:   5,
 	}
 	m.setStatus(statusInfo, fmt.Sprintf("配置文件：%s", configPath))
 	return m
@@ -112,6 +123,7 @@ func newModel(cfg appConfig, configPath string) appModel {
 func (m *appModel) setStatus(kind statusKind, text string) {
 	m.statusKind = kind
 	m.status = text
+	m.syncVisiblePaneScrolls()
 }
 
 func listPaneWidth(totalWidth int) int {
@@ -158,7 +170,11 @@ func (m appModel) activeFormPaneWidth() int {
 }
 
 func (m appModel) formPaneVisibleContentHeight() int {
-	return maxInt(0, m.availableListBodyHeight(m.renderPageHeaderWithPrompt(), m.formBottomContent())-paneVerticalChrome)
+	return m.splitPaneVisibleContentHeight(m.formBottomContent())
+}
+
+func (m appModel) splitPaneVisibleContentHeight(bottomContent string) int {
+	return maxInt(0, m.availableListBodyHeight(m.renderPageHeaderWithPrompt(), bottomContent)-paneVerticalChrome)
 }
 
 func (m appModel) isEditingProvider() bool {

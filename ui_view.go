@@ -12,6 +12,7 @@ import (
 
 var (
 	trailingANSIPattern        = regexp.MustCompile(`(?:\x1b\[[0-9;?]*[ -/]*[@-~])*$`)
+	inactivePaneBorderColor    = lipgloss.Color("242")
 	defaultPaneBorderColor     = lipgloss.Color("177")
 	resultsPaneBorderColor     = lipgloss.Color("214")
 	addProviderPaneBorderColor = lipgloss.Color("78")
@@ -37,10 +38,11 @@ type paneScrollbarMeta struct {
 	viewportOffset int
 }
 
-type formPaneLayout struct {
-	body            string
-	wrappedLines    []string
-	activeCursorRow int
+type splitPane struct {
+	title          string
+	body           string
+	viewportOffset int
+	borderColor    lipgloss.Color
 }
 
 func (m appModel) View() string {
@@ -51,46 +53,47 @@ func (m appModel) View() string {
 }
 
 func (m appModel) listView() string {
+	providerPane := splitPane{
+		title:          m.listProviderPaneTitle(),
+		body:           m.providerPaneLayout().body,
+		viewportOffset: m.providerPaneScrollOffset,
+		borderColor:    m.listPaneBorderColor(providerPaneFocus),
+	}
+	resultsPane := splitPane{
+		title:          m.listResultsPaneTitle(),
+		body:           m.resultPaneLayout().body,
+		viewportOffset: m.resultsPaneScrollOffset,
+		borderColor:    m.listPaneBorderColor(resultsPaneFocus),
+	}
+
 	return m.renderSplitView(
-		m.tr("结果", "Results"),
-		resultsPaneBorderColor,
-		m.resultListView(),
+		providerPane,
+		resultsPane,
 		m.listBottomContent(),
-		false,
-		0,
 	)
 }
 
-func (m appModel) renderSplitView(rightTitle string, rightBorderColor lipgloss.Color, rightBody, bottomContent string, rightPaneScrollbar bool, rightPaneViewportOffset int) string {
+func (m appModel) renderSplitView(leftPane, rightPane splitPane, bottomContent string) string {
 	header := m.renderPageHeaderWithPrompt()
 	paneWidth := listPaneWidth(m.width)
 	bodyHeight := m.availableListBodyHeight(header, bottomContent)
-	providerPane := renderTitledPaneWithHeight(
-		m.tr("供应商", "Providers"),
+	providerPane := renderScrollableTitledPaneWithHeight(
+		leftPane.title,
 		paneWidth,
 		bodyHeight,
-		m.providerListView(),
+		leftPane.body,
+		leftPane.viewportOffset,
+		leftPane.borderColor,
 	)
-	var rightPane string
-	if rightPaneScrollbar {
-		rightPane = renderTitledPaneWithHeightAndRightScrollbarViewport(
-			rightTitle,
-			paneWidth,
-			bodyHeight,
-			rightBody,
-			rightPaneViewportOffset,
-			rightBorderColor,
-		)
-	} else {
-		rightPane = renderTitledPaneWithHeight(
-			rightTitle,
-			paneWidth,
-			bodyHeight,
-			rightBody,
-			rightBorderColor,
-		)
-	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top, providerPane, rightPane)
+	rightRenderedPane := renderScrollableTitledPaneWithHeight(
+		rightPane.title,
+		paneWidth,
+		bodyHeight,
+		rightPane.body,
+		rightPane.viewportOffset,
+		rightPane.borderColor,
+	)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, providerPane, rightRenderedPane)
 	mainContent := lipgloss.JoinVertical(lipgloss.Left,
 		header,
 		"",
@@ -110,18 +113,28 @@ func (m appModel) listBottomContent() string {
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.statusLine(),
-		renderShortcutFooter(m.tr("快捷键：Tab 编辑提示词 | a 新增供应商 | e 编辑供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出", "Keys: tab edit prompt | a add provider | e edit provider | enter run checks | j/k move | l toggle lang | q quit")),
+		renderShortcutFooter(m.tr("快捷键：Tab 编辑提示词 | p 聚焦供应商栏 | r 聚焦结果栏 | j/k/w/s/↑/↓ 切换供应商 | a 新增供应商 | e 编辑供应商 | Enter 开始检测 | l 切换中英 | q 退出", "Keys: tab edit prompt | p focus providers | r focus results | j/k/w/s/up/down move providers | a add provider | e edit provider | enter run checks | l toggle lang | q quit")),
 	)
 }
 
 func (m appModel) formView() string {
+	providerPane := splitPane{
+		title:          m.tr("供应商", "Providers"),
+		body:           m.providerPaneLayout().body,
+		viewportOffset: m.providerPaneScrollOffset,
+		borderColor:    defaultPaneBorderColor,
+	}
+	formPane := splitPane{
+		title:          m.formPaneTitle(),
+		body:           m.formPaneBody(),
+		viewportOffset: m.formPaneScrollOffset,
+		borderColor:    addProviderPaneBorderColor,
+	}
+
 	return m.renderSplitView(
-		m.formPaneTitle(),
-		addProviderPaneBorderColor,
-		m.formPaneBody(),
+		providerPane,
+		formPane,
 		m.formBottomContent(),
-		true,
-		m.formPaneScrollOffset,
 	)
 }
 
@@ -141,7 +154,7 @@ func (m appModel) formPaneSections(paneWidth int) []string {
 	}
 }
 
-func (m appModel) formPaneLayout() formPaneLayout {
+func (m appModel) formPaneLayout() paneContentLayout {
 	paneWidth := listPaneWidth(m.width)
 	contentWidth := paneContentWidth(paneWidth)
 	sections := m.formPaneSections(paneWidth)
@@ -159,10 +172,116 @@ func (m appModel) formPaneLayout() formPaneLayout {
 		activeCursorRow = maxInt(0, minInt(m.activeFormCursorRow(paneWidth), len(wrappedLines)-1))
 	}
 
-	return formPaneLayout{
+	return paneContentLayout{
 		body:            strings.Join(sections, "\n\n"),
 		wrappedLines:    wrappedLines,
 		activeCursorRow: activeCursorRow,
+		activeEndRow:    activeCursorRow,
+	}
+}
+
+func (m appModel) providerPaneLayout() paneContentLayout {
+	if len(m.config.Providers) == 0 {
+		body := renderEmptyState(m.tr("还没有保存任何供应商，按 'a' 新增。", "No providers saved yet. Press 'a' to add one."))
+		return paneContentLayout{
+			body:            body,
+			wrappedLines:    wrapPaneContentLines(paneContentWidth(listPaneWidth(m.width)), body),
+			activeCursorRow: -1,
+			activeEndRow:    -1,
+		}
+	}
+
+	paneWidth := listPaneWidth(m.width)
+	contentWidth := paneContentWidth(paneWidth)
+	bodyLines := make([]string, 0, len(m.config.Providers)*2)
+	wrappedLines := make([]string, 0, len(m.config.Providers)*2)
+	activeCursorRow := -1
+	activeEndRow := -1
+	row := 0
+
+	for i, provider := range m.config.Providers {
+		cursor := "  "
+		line := fmt.Sprintf(m.tr("%s（%d 个模型）", "%s (%d models)"), provider.BaseURL, len(provider.Models))
+		entryStartRow := row
+		if i == m.cursor {
+			cursor = selectionStyle.Render("> ")
+			line = selectionStyle.Render(line)
+		}
+
+		entryLines := []string{
+			cursor + line,
+			helperTextStyle.Render("   " + strings.Join(provider.Models, ", ")),
+		}
+		for _, entryLine := range entryLines {
+			bodyLines = append(bodyLines, entryLine)
+			wrapped := wrapPaneContentLines(contentWidth, entryLine)
+			wrappedLines = append(wrappedLines, wrapped...)
+			row += len(wrapped)
+		}
+		if i == m.cursor {
+			activeCursorRow = entryStartRow
+			activeEndRow = maxInt(entryStartRow, row-1)
+		}
+	}
+
+	return paneContentLayout{
+		body:            strings.Join(bodyLines, "\n"),
+		wrappedLines:    wrappedLines,
+		activeCursorRow: activeCursorRow,
+		activeEndRow:    activeEndRow,
+	}
+}
+
+func (m appModel) resultPaneLayout() paneContentLayout {
+	paneWidth := listPaneWidth(m.width)
+	contentWidth := paneContentWidth(paneWidth)
+	bodyLines := make([]string, 0, len(m.results)+1)
+	wrappedLines := make([]string, 0, len(m.results)+1)
+	activeCursorRow := -1
+	activeEndRow := -1
+	row := 0
+
+	appendLine := func(line string, active bool) {
+		bodyLines = append(bodyLines, line)
+		lineStartRow := row
+		wrapped := wrapPaneContentLines(contentWidth, line)
+		if active {
+			activeCursorRow = lineStartRow
+			activeEndRow = maxInt(lineStartRow, lineStartRow+len(wrapped)-1)
+		}
+		wrappedLines = append(wrappedLines, wrapped...)
+		row += len(wrapped)
+	}
+
+	if m.running {
+		appendLine(loadingStyle.Render(m.spinner.View()+" "+m.tr("正在执行检测...", "Running juicy checks...")), len(m.results) == 0)
+	}
+	if len(m.results) == 0 {
+		if !m.running {
+			appendLine(renderEmptyState(m.tr("暂无结果，请先选择供应商并按 Enter。", "No results yet. Select a provider and press Enter.")), false)
+		}
+		return paneContentLayout{
+			body:            strings.Join(bodyLines, "\n"),
+			wrappedLines:    wrappedLines,
+			activeCursorRow: activeCursorRow,
+			activeEndRow:    activeEndRow,
+		}
+	}
+
+	activeIndex := maxInt(0, minInt(m.activeResult, len(m.results)-1))
+	for i, result := range m.results {
+		if result.Error != "" {
+			appendLine(errorStyle.Render(fmt.Sprintf("%s -> %s", result.Model, result.Error)), i == activeIndex)
+			continue
+		}
+		appendLine(successStyle.Render(fmt.Sprintf("%s -> %s", result.Model, result.Value)), i == activeIndex)
+	}
+
+	return paneContentLayout{
+		body:            strings.Join(bodyLines, "\n"),
+		wrappedLines:    wrappedLines,
+		activeCursorRow: activeCursorRow,
+		activeEndRow:    activeEndRow,
 	}
 }
 
@@ -180,6 +299,24 @@ func (m appModel) formPaneTitle() string {
 		return m.tr("编辑供应商", "Edit Provider")
 	}
 	return m.tr("新增供应商", "Add Provider")
+}
+
+func (m appModel) listProviderPaneTitle() string {
+	return m.tr("供应商[p]", "Providers[p]")
+}
+
+func (m appModel) listResultsPaneTitle() string {
+	return m.tr("结果[r]", "Results[r]")
+}
+
+func (m appModel) listPaneBorderColor(focus listPaneFocus) lipgloss.Color {
+	if m.listPaneFocus != focus {
+		return inactivePaneBorderColor
+	}
+	if focus == resultsPaneFocus {
+		return resultsPaneBorderColor
+	}
+	return defaultPaneBorderColor
 }
 
 func (m appModel) formIntroText() string {
@@ -221,47 +358,11 @@ func (m appModel) renderViewWithBottomBar(mainContent, bottomContent string) str
 }
 
 func (m appModel) providerListView() string {
-	lines := []string{}
-	if len(m.config.Providers) == 0 {
-		lines = append(lines, renderEmptyState(m.tr("还没有保存任何供应商，按 'a' 新增。", "No providers saved yet. Press 'a' to add one.")))
-		return strings.Join(lines, "\n")
-	}
-
-	for i, provider := range m.config.Providers {
-		cursor := "  "
-		line := fmt.Sprintf(m.tr("%s（%d 个模型）", "%s (%d models)"), provider.BaseURL, len(provider.Models))
-		if i == m.cursor {
-			cursor = selectionStyle.Render("> ")
-			line = selectionStyle.Render(line)
-		}
-		lines = append(lines, cursor+line)
-		lines = append(lines, helperTextStyle.Render("   "+strings.Join(provider.Models, ", ")))
-	}
-
-	return strings.Join(lines, "\n")
+	return m.providerPaneLayout().body
 }
 
 func (m appModel) resultListView() string {
-	lines := []string{}
-	if m.running {
-		lines = append(lines, loadingStyle.Render(m.spinner.View()+" "+m.tr("正在执行检测...", "Running juicy checks...")))
-	}
-	if len(m.results) == 0 {
-		if !m.running {
-			lines = append(lines, renderEmptyState(m.tr("暂无结果，请先选择供应商并按 Enter。", "No results yet. Select a provider and press Enter.")))
-		}
-		return strings.Join(lines, "\n")
-	}
-
-	for _, result := range m.results {
-		if result.Error != "" {
-			lines = append(lines, errorStyle.Render(fmt.Sprintf("%s -> %s", result.Model, result.Error)))
-			continue
-		}
-		lines = append(lines, successStyle.Render(fmt.Sprintf("%s -> %s", result.Model, result.Value)))
-	}
-
-	return strings.Join(lines, "\n")
+	return m.resultPaneLayout().body
 }
 
 func (m appModel) statusLine() string {
@@ -358,11 +459,7 @@ func renderTitledPaneWithHeight(title string, width, height int, body string, bo
 	return renderTitledPaneFromRendered(title, rendered, resolvedBorderColor)
 }
 
-func renderTitledPaneWithHeightAndRightScrollbar(title string, width, height int, body string, borderColor ...lipgloss.Color) string {
-	return renderTitledPaneWithHeightAndRightScrollbarViewport(title, width, height, body, 0, borderColor...)
-}
-
-func renderTitledPaneWithHeightAndRightScrollbarViewport(title string, width, height int, body string, viewportOffset int, borderColor ...lipgloss.Color) string {
+func renderScrollableTitledPaneWithHeight(title string, width, height int, body string, viewportOffset int, borderColor ...lipgloss.Color) string {
 	resolvedBorderColor := resolvePaneBorderColor(borderColor...)
 
 	if height <= 0 {
@@ -373,6 +470,14 @@ func renderTitledPaneWithHeightAndRightScrollbarViewport(title string, width, he
 	rendered := paneStyle.Copy().BorderForeground(resolvedBorderColor).Width(width).Render(strings.Join(lines, "\n"))
 	titledPane := renderTitledPaneFromRendered(title, rendered, resolvedBorderColor)
 	return rewriteRenderedPaneRightBorderWithScrollbar(titledPane, resolvedBorderColor, scrollbar)
+}
+
+func renderTitledPaneWithHeightAndRightScrollbar(title string, width, height int, body string, borderColor ...lipgloss.Color) string {
+	return renderScrollableTitledPaneWithHeight(title, width, height, body, 0, borderColor...)
+}
+
+func renderTitledPaneWithHeightAndRightScrollbarViewport(title string, width, height int, body string, viewportOffset int, borderColor ...lipgloss.Color) string {
+	return renderScrollableTitledPaneWithHeight(title, width, height, body, viewportOffset, borderColor...)
 }
 
 func layoutPaneBodyForHeight(width, height int, body string) ([]string, paneScrollbarMeta) {

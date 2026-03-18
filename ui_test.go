@@ -1059,7 +1059,7 @@ func TestModelEditModeEscCancelsAndPreservesSelection(t *testing.T) {
 		t.Fatalf("expected info status kind, got %v", canceled.statusKind)
 	}
 	view := canceled.View()
-	if !strings.Contains(view, renderPaneTitle("结果")) {
+	if !strings.Contains(stripANSI(view), "|结果[r]|") {
 		t.Fatalf("expected results pane restored after cancel: %q", view)
 	}
 	if strings.Contains(view, renderPaneTitle("编辑供应商")) {
@@ -1165,7 +1165,7 @@ func TestModelAddModeEscCancelsAndReturnsToList(t *testing.T) {
 	}
 
 	view := got.View()
-	if !strings.Contains(view, renderPaneTitle("结果")) {
+	if !strings.Contains(stripANSI(view), "|结果[r]|") {
 		t.Fatalf("expected results pane after cancel: %q", view)
 	}
 	if strings.Contains(view, renderPaneTitle("新增供应商")) {
@@ -1601,7 +1601,7 @@ func TestModelSavesProviderAndMovesCursor(t *testing.T) {
 		t.Fatalf("expected success status kind, got %v", got.statusKind)
 	}
 	view := got.View()
-	if !strings.Contains(view, renderPaneTitle("结果")) {
+	if !strings.Contains(stripANSI(view), "|结果[r]|") {
 		t.Fatalf("expected results pane restored after save: %q", view)
 	}
 	if strings.Contains(view, renderPaneTitle("新增供应商")) {
@@ -1694,10 +1694,10 @@ func TestListViewUsesSharedHeadersAndEmptyStates(t *testing.T) {
 			if !strings.Contains(view, juicyPrompt) {
 				t.Fatalf("expected default prompt in view: %q", view)
 			}
-			if !strings.Contains(view, renderPaneTitle("供应商")) {
+			if !strings.Contains(stripANSI(view), "|供应商[p]|") {
 				t.Fatalf("expected provider pane title in view: %q", view)
 			}
-			if !strings.Contains(view, renderPaneTitle("结果")) {
+			if !strings.Contains(stripANSI(view), "|结果[r]|") {
 				t.Fatalf("expected result pane title in view: %q", view)
 			}
 			if !strings.Contains(view, renderEmptyState("还没有保存任何供应商，按 'a' 新增。")) {
@@ -1710,6 +1710,127 @@ func TestListViewUsesSharedHeadersAndEmptyStates(t *testing.T) {
 				t.Fatalf("expected shortcut footer in view: %q", view)
 			}
 		})
+	}
+}
+
+func TestListViewUsesFocusedPaneTitlesAndColors(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.width = 100
+
+	providerFocusedView := m.listView()
+	if !strings.Contains(providerFocusedView, renderPaneTitle(m.listProviderPaneTitle(), defaultPaneBorderColor)) {
+		t.Fatalf("expected provider pane to use active color by default: %q", providerFocusedView)
+	}
+	if !strings.Contains(providerFocusedView, renderPaneTitle(m.listResultsPaneTitle(), inactivePaneBorderColor)) {
+		t.Fatalf("expected results pane to start inactive: %q", providerFocusedView)
+	}
+
+	updated, cmd := m.Update(keyRunes('r'))
+	got := updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.listPaneFocus != resultsPaneFocus {
+		t.Fatalf("expected results pane focus, got %v", got.listPaneFocus)
+	}
+
+	resultsFocusedView := got.listView()
+	if !strings.Contains(resultsFocusedView, renderPaneTitle(got.listProviderPaneTitle(), inactivePaneBorderColor)) {
+		t.Fatalf("expected provider pane to dim when unfocused: %q", resultsFocusedView)
+	}
+	if !strings.Contains(resultsFocusedView, renderPaneTitle(got.listResultsPaneTitle(), resultsPaneBorderColor)) {
+		t.Fatalf("expected results pane to use active color when focused: %q", resultsFocusedView)
+	}
+}
+
+func TestListKeysSupportWSForProviderNavigation(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", Models: []string{"a"}}, {BaseURL: "https://two", Models: []string{"b"}}}}, "juicy-providers.json")
+
+	updated, cmd := m.Update(keyRunes('s'))
+	got := updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.cursor != 1 {
+		t.Fatalf("expected s to move provider cursor down, got %d", got.cursor)
+	}
+
+	updated, cmd = got.Update(keyRunes('w'))
+	got = updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.cursor != 0 {
+		t.Fatalf("expected w to move provider cursor up, got %d", got.cursor)
+	}
+}
+
+func TestMouseClickChangesFocusedListPane(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.width = 100
+	m.height = 20
+
+	resultX, resultY := listPaneClickPoint(m, resultsPaneFocus)
+	updated, cmd := m.Update(mouseLeftPress(resultX, resultY))
+	got := updated.(appModel)
+
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.listPaneFocus != resultsPaneFocus {
+		t.Fatalf("expected mouse click to focus results pane, got %v", got.listPaneFocus)
+	}
+}
+
+func TestMouseWheelScrollsOnlyFocusedProviderPane(t *testing.T) {
+	providers := make([]provider, 0, 10)
+	for i := 0; i < 10; i++ {
+		providers = append(providers, provider{BaseURL: fmt.Sprintf("https://provider-%02d.example.com", i+1), Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}})
+	}
+	m := newModel(appConfig{Providers: providers}, "juicy-providers.json")
+	m.width = 100
+	m.height = 14
+	m.focusListPane(providerPaneFocus)
+
+	updated, cmd := m.Update(mouseWheelDown())
+	got := updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.providerPaneScrollOffset <= 0 {
+		t.Fatalf("expected wheel to scroll provider pane, got %d", got.providerPaneScrollOffset)
+	}
+	if got.cursor != m.cursor {
+		t.Fatalf("expected wheel not to change selected provider, got %d want %d", got.cursor, m.cursor)
+	}
+	if got.resultsPaneScrollOffset != m.resultsPaneScrollOffset {
+		t.Fatalf("expected provider-focused wheel not to scroll results pane, got %d want %d", got.resultsPaneScrollOffset, m.resultsPaneScrollOffset)
+	}
+}
+
+func TestMouseWheelScrollsOnlyFocusedResultsPane(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", Models: []string{"a"}}, {BaseURL: "https://two", Models: []string{"b"}}, {BaseURL: "https://three", Models: []string{"c"}}}}, "juicy-providers.json")
+	m.width = 100
+	m.height = 14
+	m.results = make([]modelResult, 0, 10)
+	for i := 0; i < 10; i++ {
+		m.results = append(m.results, modelResult{Model: fmt.Sprintf("model-%02d", i+1), Value: fmt.Sprintf("%d", i+1)})
+	}
+	m.focusListPane(resultsPaneFocus)
+
+	updated, cmd := m.Update(mouseWheelDown())
+	got := updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command")
+	}
+	if got.resultsPaneScrollOffset <= 0 {
+		t.Fatalf("expected wheel to scroll results pane, got %d", got.resultsPaneScrollOffset)
+	}
+	if got.providerPaneScrollOffset != m.providerPaneScrollOffset {
+		t.Fatalf("expected results-focused wheel not to scroll provider pane, got %d want %d", got.providerPaneScrollOffset, m.providerPaneScrollOffset)
+	}
+	if got.cursor != m.cursor {
+		t.Fatalf("expected wheel not to change selected provider, got %d want %d", got.cursor, m.cursor)
 	}
 }
 
@@ -1878,46 +1999,193 @@ func TestRenderTitledPaneWithHeightAndRightScrollbarViewportMovesThumbWithOffset
 	}
 }
 
-func TestRightBorderScrollbarStaysScopedToAddEditPane(t *testing.T) {
+func TestRightBorderScrollbarStyleIsReusableAcrossPanes(t *testing.T) {
 	width := 24
 	height := 8
 	body := strings.Repeat("https://provider.example.com/v1/models/super-long-name", 2)
 
-	providerPane := renderTitledPaneWithHeight("Providers", width, height, body)
-	resultsPane := renderTitledPaneWithHeight("Results", width, height, body, resultsPaneBorderColor)
+	providerPane := renderScrollableTitledPaneWithHeight("Providers", width, height, body, 0)
+	resultsPane := renderScrollableTitledPaneWithHeight("Results", width, height, body, 0, resultsPaneBorderColor)
 	formPane := renderTitledPaneWithHeightAndRightScrollbar("Add Provider", width, height, body, addProviderPaneBorderColor)
 
-	if strings.Contains(stripANSI(providerPane), "▌") {
-		t.Fatalf("expected providers pane to keep its plain border, got %q", providerPane)
+	if !strings.Contains(stripANSI(providerPane), "▌") {
+		t.Fatalf("expected providers pane to reuse the scrollbar style on overflow, got %q", providerPane)
 	}
-	if strings.Contains(stripANSI(resultsPane), "▌") {
-		t.Fatalf("expected results pane to keep its plain border, got %q", resultsPane)
+	if !strings.Contains(stripANSI(resultsPane), "▌") {
+		t.Fatalf("expected results pane to reuse the scrollbar style on overflow, got %q", resultsPane)
 	}
 	if !strings.Contains(stripANSI(formPane), "▌") {
 		t.Fatalf("expected add/edit pane to render a scrollbar on overflow, got %q", formPane)
 	}
 }
 
-func TestFormViewRoutesScrollbarToAddPaneWhileListViewStaysPlain(t *testing.T) {
+func TestListAndFormViewShareOverflowScrollbarRendering(t *testing.T) {
 	m := newModel(appConfig{Providers: []provider{
 		{BaseURL: "https://one", Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}},
 		{BaseURL: "https://two", Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}},
 		{BaseURL: "https://three", Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}},
+		{BaseURL: "https://four", Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}},
+		{BaseURL: "https://five", Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}},
+		{BaseURL: "https://six", Models: []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"}},
 	}}, "juicy-providers.json")
 	m.width = 100
-	m.height = 16
+	m.height = 14
+	m.results = []modelResult{
+		{Model: "line-01", Value: "1"},
+		{Model: "line-02", Value: "2"},
+		{Model: "line-03", Value: "3"},
+		{Model: "line-04", Value: "4"},
+		{Model: "line-05", Value: "5"},
+		{Model: "line-06", Value: "6"},
+		{Model: "line-07", Value: "7"},
+		{Model: "line-08", Value: "8"},
+		{Model: "line-09", Value: "9"},
+		{Model: "line-10", Value: "10"},
+	}
+	m.activeResult = len(m.results) - 1
+	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
+	m.syncResultsPaneScroll()
 	m.modelsInput.SetValue("gpt-4o-mini\nqwen-max\nclaude-3.5-sonnet\nllama-3.1-8b\nqvq-plus\ndeepseek-chat")
 	setFocusedFormField(&m, addProviderModelsField)
 
 	listView := stripANSI(m.listView())
-	if strings.Contains(listView, "▌") {
-		t.Fatalf("expected list view panes to keep plain borders, got %q", listView)
+	if !strings.Contains(listView, "▌") {
+		t.Fatalf("expected list view panes to render shared scrollbars on overflow, got %q", listView)
 	}
 
 	m.mode = addMode
+	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
 	formView := stripANSI(m.formView())
 	if !strings.Contains(formView, "▌") {
 		t.Fatalf("expected add/edit form view to render the right-border scrollbar, got %q", formView)
+	}
+}
+
+func TestProviderPaneScrollKeepsSelectedProviderVisible(t *testing.T) {
+	providers := make([]provider, 0, 10)
+	for i := 0; i < 10; i++ {
+		providers = append(providers, provider{
+			BaseURL: fmt.Sprintf("https://provider-%02d.example.com", i+1),
+			Models:  []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"},
+		})
+	}
+
+	m := newModel(appConfig{Providers: providers}, "juicy-providers.json")
+	m.width = 100
+	m.height = 16
+	m.cursor = len(providers) - 1
+	m.syncProviderPaneScroll(paneScrollDirectionDown)
+
+	if m.providerPaneScrollOffset <= 0 {
+		t.Fatalf("expected provider pane to scroll for the selected provider, got %d", m.providerPaneScrollOffset)
+	}
+
+	layout := m.providerPaneLayout()
+	visibleHeight := m.splitPaneVisibleContentHeight(m.listBottomContent())
+	if layout.activeCursorRow < m.providerPaneScrollOffset || layout.activeCursorRow >= m.providerPaneScrollOffset+visibleHeight {
+		t.Fatalf("expected selected provider row %d inside [%d,%d)", layout.activeCursorRow, m.providerPaneScrollOffset, m.providerPaneScrollOffset+visibleHeight)
+	}
+}
+
+func TestProviderPaneScrollKeepsWrappedSelectedEntryFullyVisible(t *testing.T) {
+	providers := []provider{
+		{BaseURL: "https://short.example.com", Models: []string{"gpt-4o-mini"}},
+		{BaseURL: "https://long-provider-host.example.com/openai-compatible/v1/chat/completions", Models: []string{"gpt-4o-mini-super-long-name", "claude-compatible-model-name", "qwen-max-compatible-model"}},
+	}
+
+	m := newModel(appConfig{Providers: providers}, "juicy-providers.json")
+	m.width = 80
+	m.height = 16
+	m.cursor = 1
+	m.syncProviderPaneScroll(paneScrollDirectionDown)
+
+	layout := m.providerPaneLayout()
+	visibleHeight := m.splitPaneVisibleContentHeight(m.listBottomContent())
+	if layout.activeCursorRow < 0 || layout.activeEndRow < layout.activeCursorRow {
+		t.Fatalf("expected wrapped selected provider span, got start=%d end=%d", layout.activeCursorRow, layout.activeEndRow)
+	}
+	if layout.activeEndRow-layout.activeCursorRow < 1 {
+		t.Fatalf("expected wrapped provider entry to span multiple rows, got start=%d end=%d", layout.activeCursorRow, layout.activeEndRow)
+	}
+	if layout.activeCursorRow < m.providerPaneScrollOffset || layout.activeEndRow >= m.providerPaneScrollOffset+visibleHeight {
+		t.Fatalf("expected wrapped provider span [%d,%d] inside [%d,%d)", layout.activeCursorRow, layout.activeEndRow, m.providerPaneScrollOffset, m.providerPaneScrollOffset+visibleHeight)
+	}
+}
+
+func TestFinishRunScrollsResultsPaneToLatestActiveResult(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", Models: []string{"gpt-4o-mini"}}}}, "juicy-providers.json")
+	m.width = 100
+	m.height = 16
+
+	results := make([]modelResult, 0, 8)
+	for i := 0; i < 8; i++ {
+		results = append(results, modelResult{Model: fmt.Sprintf("model-%02d", i+1), Value: fmt.Sprintf("%d", i+1)})
+	}
+
+	m.finishRun(results)
+
+	if m.activeResult != len(results)-1 {
+		t.Fatalf("expected latest result to become active, got %d want %d", m.activeResult, len(results)-1)
+	}
+	if m.resultsPaneScrollOffset <= 0 {
+		t.Fatalf("expected results pane to scroll to the latest result, got %d", m.resultsPaneScrollOffset)
+	}
+
+	layout := m.resultPaneLayout()
+	visibleHeight := m.splitPaneVisibleContentHeight(m.listBottomContent())
+	if layout.activeCursorRow < m.resultsPaneScrollOffset || layout.activeCursorRow >= m.resultsPaneScrollOffset+visibleHeight {
+		t.Fatalf("expected active result row %d inside [%d,%d)", layout.activeCursorRow, m.resultsPaneScrollOffset, m.resultsPaneScrollOffset+visibleHeight)
+	}
+}
+
+func TestFinishRunKeepsWrappedLatestResultFullyVisibleAfterStatusUpdate(t *testing.T) {
+	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", Models: []string{"gpt-4o-mini"}}}}, "juicy-providers.json")
+	m.width = 80
+	m.height = 13
+
+	results := []modelResult{
+		{Model: "short-01", Value: "1"},
+		{Model: "short-02", Value: "2"},
+		{Model: "extremely-long-model-name-that-wraps-more-than-once-in-the-results-pane", Value: "a-very-long-value-that-also-wraps-to-the-next-row"},
+	}
+
+	m.finishRun(results)
+
+	layout := m.resultPaneLayout()
+	visibleHeight := m.splitPaneVisibleContentHeight(m.listBottomContent())
+	if layout.activeEndRow-layout.activeCursorRow < 1 {
+		t.Fatalf("expected latest result to wrap across multiple rows, got start=%d end=%d", layout.activeCursorRow, layout.activeEndRow)
+	}
+	if layout.activeCursorRow < m.resultsPaneScrollOffset || layout.activeEndRow >= m.resultsPaneScrollOffset+visibleHeight {
+		t.Fatalf("expected wrapped latest result span [%d,%d] inside [%d,%d)", layout.activeCursorRow, layout.activeEndRow, m.resultsPaneScrollOffset, m.resultsPaneScrollOffset+visibleHeight)
+	}
+}
+
+func TestPromptEditingReflowResyncsVisiblePaneScrolls(t *testing.T) {
+	providers := make([]provider, 0, 8)
+	for i := 0; i < 8; i++ {
+		providers = append(providers, provider{
+			BaseURL: fmt.Sprintf("https://provider-%02d.example.com", i+1),
+			Models:  []string{"gpt-4o-mini", "qwen-max", "claude-3.5-sonnet"},
+		})
+	}
+
+	m := newModel(appConfig{Providers: providers}, "juicy-providers.json")
+	m.width = 80
+	m.height = 13
+	m.cursor = len(providers) - 1
+	m.syncProviderPaneScroll(paneScrollDirectionDown)
+	before := m.providerPaneScrollOffset
+
+	m.focusPromptInput()
+
+	if m.providerPaneScrollOffset < before {
+		t.Fatalf("expected prompt editing reflow to keep provider selection visible, before=%d after=%d", before, m.providerPaneScrollOffset)
+	}
+	layout := m.providerPaneLayout()
+	visibleHeight := m.splitPaneVisibleContentHeight(m.listBottomContent())
+	if layout.activeCursorRow < m.providerPaneScrollOffset || layout.activeEndRow >= m.providerPaneScrollOffset+visibleHeight {
+		t.Fatalf("expected selected provider span [%d,%d] inside [%d,%d) after prompt edit reflow", layout.activeCursorRow, layout.activeEndRow, m.providerPaneScrollOffset, m.providerPaneScrollOffset+visibleHeight)
 	}
 }
 
@@ -2388,10 +2656,10 @@ func TestViewSwitchesOnlyRightPaneInAddMode(t *testing.T) {
 	m.height = 20
 
 	listView := m.View()
-	if !strings.Contains(listView, renderPaneTitle("供应商")) {
+	if !strings.Contains(stripANSI(listView), "|供应商[p]|") {
 		t.Fatalf("expected provider pane in list view: %q", listView)
 	}
-	if !strings.Contains(listView, renderPaneTitle("结果")) {
+	if !strings.Contains(stripANSI(listView), "|结果[r]|") {
 		t.Fatalf("expected results pane in list view: %q", listView)
 	}
 	if !strings.Contains(listView, selectionStyle.Render("https://one（1 个模型）")) {
@@ -2580,8 +2848,24 @@ func thumbRows(lines []string) []int {
 	return rows
 }
 
+func listPaneClickPoint(m appModel, focus listPaneFocus) (int, int) {
+	providerBounds, resultsBounds := m.listPaneBounds()
+	if focus == resultsPaneFocus {
+		return resultsBounds.x + 1, resultsBounds.y + 1
+	}
+	return providerBounds.x + 1, providerBounds.y + 1
+}
+
+func mouseLeftPress(x, y int) tea.MouseMsg {
+	return tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress}
+}
+
+func mouseWheelDown() tea.MouseMsg {
+	return tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress}
+}
+
 func listModeFooterText() string {
-	return "快捷键：Tab 编辑提示词 | a 新增供应商 | e 编辑供应商 | Enter 开始检测 | j/k 移动 | l 切换中英 | q 退出"
+	return "快捷键：Tab 编辑提示词 | p 聚焦供应商栏 | r 聚焦结果栏 | j/k/w/s/↑/↓ 切换供应商 | a 新增供应商 | e 编辑供应商 | Enter 开始检测 | l 切换中英 | q 退出"
 }
 
 func addModeFooterText() string {
