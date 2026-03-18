@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	openai "github.com/openai/openai-go/v3"
@@ -93,14 +94,15 @@ type attemptOutcome struct {
 	hasNumeric bool
 }
 
-func runJuicyChecks(ctx context.Context, selected provider, settings requestSettings, concurrency int) []modelResult {
+func runJuicyChecks(ctx context.Context, selected provider, settings requestSettings, concurrency int, onProgress func(completed, total int)) []modelResult {
 	settings = normalizeRequestSettings(settings)
 	if concurrency < 1 {
 		concurrency = 1
 	}
 
 	results := make([]modelResult, len(selected.Models))
-	if len(selected.Models) == 0 {
+	totalModels := len(selected.Models)
+	if totalModels == 0 {
 		return results
 	}
 
@@ -119,6 +121,7 @@ func runJuicyChecks(ctx context.Context, selected provider, settings requestSett
 		},
 	}
 	var wg sync.WaitGroup
+	var completedChecks atomic.Int32
 
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
@@ -127,6 +130,9 @@ func runJuicyChecks(ctx context.Context, selected provider, settings requestSett
 			for index := range jobs {
 				modelName := selected.Models[index]
 				results[index] = checkModel(ctx, httpClient, selected, modelName, settings)
+				if onProgress != nil {
+					onProgress(int(completedChecks.Add(1)), totalModels)
+				}
 			}
 		}()
 	}

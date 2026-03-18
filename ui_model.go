@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	rw "github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
@@ -102,6 +103,9 @@ type appModel struct {
 	statusKind               statusKind
 	results                  []modelResult
 	running                  bool
+	runCompleted             int
+	runTotal                 int
+	runEvents                <-chan tea.Msg
 	spinner                  spinner.Model
 	concurrency              int
 }

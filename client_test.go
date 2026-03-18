@@ -229,7 +229,7 @@ func TestCheckModelDoesNotRetryAPIErrors(t *testing.T) {
 }
 
 func TestRunJuicyChecksEmptyModels(t *testing.T) {
-	results := runJuicyChecks(context.Background(), provider{BaseURL: "https://example.com", Models: nil}, testRequestSettings(), 5)
+	results := runJuicyChecks(context.Background(), provider{BaseURL: "https://example.com", Models: nil}, testRequestSettings(), 5, nil)
 	if len(results) != 0 {
 		t.Fatalf("expected empty results, got %d", len(results))
 	}
@@ -258,7 +258,7 @@ func TestRunJuicyChecksPreservesModelOrder(t *testing.T) {
 		Models: []string{"slow", "fast", "medium"},
 	}
 
-	results := runJuicyChecks(context.Background(), selected, testRequestSettings(), 3)
+	results := runJuicyChecks(context.Background(), selected, testRequestSettings(), 3, nil)
 	if len(results) != 3 {
 		t.Fatalf("unexpected results length: got %d want 3", len(results))
 	}
@@ -267,6 +267,61 @@ func TestRunJuicyChecksPreservesModelOrder(t *testing.T) {
 		if results[i] != want[i] {
 			t.Fatalf("unexpected result at %d: got %+v want %+v", i, results[i], want[i])
 		}
+	}
+}
+
+func TestRunJuicyChecksReportsProgressForSuccessAndFailure(t *testing.T) {
+	selected := provider{
+		BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+			var req chatCompletionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			switch req.Model {
+			case "ok-model":
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"7"}}]}`)
+			case "bad-model":
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprint(w, `{"error":{"message":"rate limit"}}`)
+			default:
+				t.Fatalf("unexpected model %q", req.Model)
+			}
+		}),
+		Models: []string{"ok-model", "bad-model"},
+	}
+
+	var progressCalls atomic.Int32
+	var maxCompleted atomic.Int32
+	var seenTotal atomic.Int32
+
+	results := runJuicyChecks(context.Background(), selected, testRequestSettings(), 2, func(completed, total int) {
+		progressCalls.Add(1)
+		seenTotal.Store(int32(total))
+		for {
+			current := maxCompleted.Load()
+			if int32(completed) <= current || maxCompleted.CompareAndSwap(current, int32(completed)) {
+				break
+			}
+		}
+	})
+
+	if got := progressCalls.Load(); got != 2 {
+		t.Fatalf("expected 2 progress callbacks, got %d", got)
+	}
+	if got := maxCompleted.Load(); got != 2 {
+		t.Fatalf("expected progress to reach 2 completed models, got %d", got)
+	}
+	if got := seenTotal.Load(); got != 2 {
+		t.Fatalf("expected progress total 2, got %d", got)
+	}
+	if len(results) != 2 {
+		t.Fatalf("unexpected results length: got %d want 2", len(results))
+	}
+	if results[0] != (modelResult{Model: "ok-model", Value: "7"}) {
+		t.Fatalf("unexpected first result: %+v", results[0])
+	}
+	if results[1] != (modelResult{Model: "bad-model", Error: "API 429: rate limit"}) {
+		t.Fatalf("unexpected second result: %+v", results[1])
 	}
 }
 

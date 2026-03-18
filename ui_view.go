@@ -264,6 +264,7 @@ func (m appModel) resultPaneLayout() paneContentLayout {
 
 	if m.running {
 		appendLine(loadingStyle.Render(m.spinner.View()+" "+m.tr("正在执行检测...", "Running juicy checks...")), len(m.results) == 0)
+		appendLine(loadingStyle.Render(m.runProgressView(contentWidth)), false)
 	}
 	if len(m.results) == 0 {
 		if !m.running {
@@ -292,6 +293,27 @@ func (m appModel) resultPaneLayout() paneContentLayout {
 		activeCursorRow: activeCursorRow,
 		activeEndRow:    activeEndRow,
 	}
+}
+
+func (m appModel) runProgressView(contentWidth int) string {
+	label := fmt.Sprintf("%s %d/%d", m.tr("进度", "Progress"), m.runCompleted, m.runTotal)
+	barWidth := minInt(16, maxInt(0, contentWidth-lipgloss.Width(label)-3))
+	if barWidth <= 0 {
+		return label
+	}
+	return fmt.Sprintf("%s %s", label, renderASCIIProgressBar(m.runCompleted, m.runTotal, barWidth))
+}
+
+func renderASCIIProgressBar(completed, total, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	filled := 0
+	if total > 0 {
+		filled = int(math.Round(float64(width*completed) / float64(total)))
+	}
+	filled = maxInt(0, minInt(filled, width))
+	return "[" + strings.Repeat("#", filled) + strings.Repeat("-", width-filled) + "]"
 }
 
 func (m appModel) formBottomContent() string {

@@ -10,9 +10,33 @@ type runFinishedMsg struct {
 	Results []modelResult
 }
 
-func runChecksCmd(selected provider, settings requestSettings, concurrency int) tea.Cmd {
+type runProgressMsg struct {
+	Completed int
+	Total     int
+}
+
+func startRunChecks(selected provider, settings requestSettings, concurrency int) <-chan tea.Msg {
+	events := make(chan tea.Msg, maxInt(1, len(selected.Models)+1))
+	go func() {
+		results := runJuicyChecks(context.Background(), selected, settings, concurrency, func(completed, total int) {
+			events <- runProgressMsg{Completed: completed, Total: total}
+		})
+		events <- runFinishedMsg{Results: results}
+		close(events)
+	}()
+	return events
+}
+
+func waitForRunMsgCmd(events <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		results := runJuicyChecks(context.Background(), selected, settings, concurrency)
-		return runFinishedMsg{Results: results}
+		msg, ok := <-events
+		if !ok {
+			return nil
+		}
+		return msg
 	}
+}
+
+func runChecksCmd(events <-chan tea.Msg) tea.Cmd {
+	return waitForRunMsgCmd(events)
 }

@@ -31,6 +31,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case runProgressMsg:
+		m.updateRunProgress(msg.Completed, msg.Total)
+		if m.runEvents == nil {
+			return m, nil
+		}
+		return m, waitForRunMsgCmd(m.runEvents)
 	case runFinishedMsg:
 		m.finishRun(msg.Results)
 		return m, nil
@@ -187,7 +193,9 @@ func (m appModel) submitProviderForm() (tea.Model, tea.Cmd) {
 
 func (m *appModel) finishRun(results []modelResult) {
 	m.running = false
+	m.runEvents = nil
 	m.results = results
+	m.updateRunProgress(len(results), len(results))
 	m.activeResult = maxInt(0, len(results)-1)
 	m.syncResultsPaneScroll()
 	failures := 0
@@ -203,6 +211,29 @@ func (m *appModel) finishRun(results []modelResult) {
 	} else {
 		m.setStatus(statusWarning, fmt.Sprintf(m.tr("检测完成，错误 %d/%d。", "Finished with %d/%d errors."), failures, len(results)))
 	}
+}
+
+func (m *appModel) updateRunProgress(completed, total int) {
+	if total < 0 {
+		total = 0
+	}
+	if completed < 0 {
+		completed = 0
+	}
+	if total == 0 && completed > 0 {
+		total = completed
+	}
+	if total > 0 && completed > total {
+		completed = total
+	}
+	if completed < m.runCompleted {
+		completed = m.runCompleted
+	}
+	if total < m.runTotal {
+		total = m.runTotal
+	}
+	m.runCompleted = completed
+	m.runTotal = total
 }
 
 func (m *appModel) enterAddMode() {
@@ -285,15 +316,17 @@ func (m *appModel) toggleRequestMode() {
 func (m *appModel) startChecks() tea.Cmd {
 	selected := m.config.Providers[m.cursor]
 	m.running = true
+	m.updateRunProgress(0, len(selected.Models))
 	m.results = nil
 	m.activeResult = 0
 	m.resultsPaneScrollOffset = 0
+	m.runEvents = startRunChecks(selected, normalizeRequestSettings(m.config.RequestSettings), m.concurrency)
 	if m.lang == langEN {
 		m.setStatus(statusLoading, fmt.Sprintf("Checking %d model(s) from %s with concurrency %d...", len(selected.Models), selected.BaseURL, m.concurrency))
 	} else {
 		m.setStatus(statusLoading, fmt.Sprintf("正在检测 %s 的 %d 个模型（并发 %d）...", selected.BaseURL, len(selected.Models), m.concurrency))
 	}
-	return runChecksCmd(selected, normalizeRequestSettings(m.config.RequestSettings), m.concurrency)
+	return runChecksCmd(m.runEvents)
 }
 
 func (m *appModel) buildProviderFromInputs() (provider, error) {

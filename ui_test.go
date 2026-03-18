@@ -526,6 +526,12 @@ func TestModelEnterStartsChecksAndClearsResults(t *testing.T) {
 	if got.results != nil {
 		t.Fatalf("expected previous results cleared, got %+v", got.results)
 	}
+	if got.runCompleted != 0 || got.runTotal != 1 {
+		t.Fatalf("expected run progress 0/1, got %d/%d", got.runCompleted, got.runTotal)
+	}
+	if got.runEvents == nil {
+		t.Fatal("expected run event stream to be initialized")
+	}
 	if got.status != "正在检测 https://example.com 的 1 个模型（并发 5）..." {
 		t.Fatalf("unexpected status: %q", got.status)
 	}
@@ -559,11 +565,36 @@ func TestModelEnterUsesSavedRequestPromptForChecks(t *testing.T) {
 	}
 
 	msg := cmd()
+	progressMsg, ok := msg.(runProgressMsg)
+	if !ok {
+		t.Fatalf("expected first message to be runProgressMsg, got %T", msg)
+	}
+	if progressMsg.Completed != 1 || progressMsg.Total != 1 {
+		t.Fatalf("unexpected progress message: %+v", progressMsg)
+	}
+
+	msg = waitForRunMsgCmd(m.runEvents)()
 	if _, ok := msg.(runFinishedMsg); !ok {
-		t.Fatalf("expected runFinishedMsg, got %T", msg)
+		t.Fatalf("expected second message to be runFinishedMsg, got %T", msg)
 	}
 	if capturedPrompt != "edited juicy prompt" {
 		t.Fatalf("expected edited prompt to be used, got %q", capturedPrompt)
+	}
+}
+
+func TestModelRunProgressMsgUpdatesProgressAndKeepsListening(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	m.running = true
+	m.runEvents = make(chan tea.Msg)
+
+	updated, cmd := m.Update(runProgressMsg{Completed: 1, Total: 3})
+	got := updated.(appModel)
+
+	if cmd == nil {
+		t.Fatal("expected follow-up command to keep listening for run events")
+	}
+	if got.runCompleted != 1 || got.runTotal != 3 {
+		t.Fatalf("expected progress 1/3, got %d/%d", got.runCompleted, got.runTotal)
 	}
 }
 
@@ -1683,6 +1714,7 @@ func TestStatusLineUsesSeverityStyles(t *testing.T) {
 func TestListViewUsesDistinctSemanticStyles(t *testing.T) {
 	m := newModel(appConfig{Providers: []provider{{BaseURL: "https://one", Models: []string{"a", "b"}}}}, "juicy-providers.json")
 	m.cursor = 0
+	m.width = 100
 	providerView := m.providerListView()
 	selectedLine := selectionStyle.Render("https://one（2 个模型）")
 	if !strings.Contains(providerView, selectedLine) {
@@ -1690,10 +1722,16 @@ func TestListViewUsesDistinctSemanticStyles(t *testing.T) {
 	}
 
 	m.running = true
+	m.runCompleted = 2
+	m.runTotal = 5
 	loadingView := m.resultListView()
 	loadingLine := loadingStyle.Render(m.spinner.View() + " 正在执行检测...")
 	if !strings.Contains(loadingView, loadingLine) {
 		t.Fatalf("expected loading line in view: %q", loadingView)
+	}
+	progressLine := loadingStyle.Render(m.runProgressView(paneContentWidth(listPaneWidth(m.width))))
+	if !strings.Contains(loadingView, progressLine) {
+		t.Fatalf("expected progress line in view: %q", loadingView)
 	}
 
 	m.running = false
