@@ -47,6 +47,12 @@ var requestSettingsFields = []formFieldSpec{
 		kind:        inputKindText,
 	},
 	{
+		label:       localizedText{zh: "请求时间间隔(s)", en: "Request Interval (s)"},
+		placeholder: localizedText{zh: "0", en: "0"},
+		helper:      localizedText{zh: "相邻请求之间等待的秒数，支持小数；默认 0。", en: "Seconds to wait between outgoing requests; decimals allowed, defaults to 0."},
+		kind:        inputKindText,
+	},
+	{
 		label:       localizedText{zh: "超时时间(s)", en: "Timeout (s)"},
 		placeholder: localizedText{zh: "180", en: "180"},
 		helper:      localizedText{zh: "单次 HTTP 请求超时，默认 180 秒。", en: "Per-request HTTP timeout in seconds; defaults to 180."},
@@ -82,7 +88,7 @@ func (m appModel) tr(zh, en string) string {
 
 func (m *appModel) applyPlaceholders() {
 	applyFormLocale(&m.baseURLInput, &m.apiKeyInput, &m.modelsInput, m.lang, m.activeFormPaneWidth())
-	applyRequestSettingsLocale(&m.requestPromptInput, &m.requestTimeoutInput, &m.requestRetryInput, m.lang, m.activeFormPaneWidth())
+	applyRequestSettingsLocale(&m.requestPromptInput, &m.requestIntervalInput, &m.requestTimeoutInput, &m.requestRetryInput, m.lang, m.activeFormPaneWidth())
 }
 
 func applyFormLocale(baseURLInput, apiKeyInput *textinput.Model, modelsInput *textarea.Model, lang appLanguage, paneWidth int) {
@@ -93,9 +99,10 @@ func applyFormLocale(baseURLInput, apiKeyInput *textinput.Model, modelsInput *te
 	syncModelsInputLayout(modelsInput, paneWidth)
 }
 
-func applyRequestSettingsLocale(promptInput, timeoutInput, retryInput *textinput.Model, lang appLanguage, paneWidth int) {
+func applyRequestSettingsLocale(promptInput, intervalInput, timeoutInput, retryInput *textinput.Model, lang appLanguage, paneWidth int) {
 	inputWidth := inputWidthForFormPane(paneWidth)
 	applyTextInputLocale(promptInput, requestSettingsFields[requestSettingsPromptField], lang, inputWidth)
+	applyTextInputLocale(intervalInput, requestSettingsFields[requestSettingsIntervalField], lang, inputWidth)
 	applyTextInputLocale(timeoutInput, requestSettingsFields[requestSettingsTimeoutField], lang, inputWidth)
 	applyTextInputLocale(retryInput, requestSettingsFields[requestSettingsRetryField], lang, inputWidth)
 }

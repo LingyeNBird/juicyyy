@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -482,6 +483,9 @@ func TestNewModelSeedsRequestSettingsWithDefaults(t *testing.T) {
 	if got := m.requestPromptInput.Value(); got != juicyPrompt {
 		t.Fatalf("expected default prompt %q, got %q", juicyPrompt, got)
 	}
+	if got := m.requestIntervalInput.Value(); got != "0" {
+		t.Fatalf("expected default interval 0, got %q", got)
+	}
 	if got := m.requestTimeoutInput.Value(); got != "180" {
 		t.Fatalf("expected default timeout 180, got %q", got)
 	}
@@ -627,10 +631,20 @@ func TestModelRequestSettingsModeOpensFromOAndSaves(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected no command when moving focus")
 	}
+	if got.focusIndex != requestSettingsIntervalField {
+		t.Fatalf("expected interval field focus, got %d", got.focusIndex)
+	}
+
+	updated, cmd = got.Update(tea.KeyMsg{Type: tea.KeyTab})
+	got = updated.(appModel)
+	if cmd != nil {
+		t.Fatal("expected no command when moving focus")
+	}
 	if got.focusIndex != requestSettingsTimeoutField {
 		t.Fatalf("expected timeout field focus, got %d", got.focusIndex)
 	}
 
+	got.requestIntervalInput.SetValue("0.25")
 	got.requestTimeoutInput.SetValue("240")
 	got.requestRetryInput.SetValue("2")
 	got.requestMode = requestModeResponses
@@ -645,6 +659,9 @@ func TestModelRequestSettingsModeOpensFromOAndSaves(t *testing.T) {
 	}
 	if got.config.RequestSettings.TimeoutSeconds != 240 {
 		t.Fatalf("expected saved timeout 240, got %d", got.config.RequestSettings.TimeoutSeconds)
+	}
+	if got.config.RequestSettings.IntervalSeconds != 0.25 {
+		t.Fatalf("expected saved interval 0.25, got %v", got.config.RequestSettings.IntervalSeconds)
 	}
 	if got.config.RequestSettings.RetryCount != 2 {
 		t.Fatalf("expected saved retries 2, got %d", got.config.RequestSettings.RetryCount)
@@ -1735,13 +1752,38 @@ func TestListViewUsesDistinctSemanticStyles(t *testing.T) {
 	}
 
 	m.running = false
-	m.results = []modelResult{{Model: "ok", Value: "7"}, {Model: "bad", Error: "boom"}}
-	resultView := m.resultListView()
-	if !strings.Contains(resultView, successStyle.Render("ok -> 7")) {
-		t.Fatalf("expected success result in view: %q", resultView)
+	m.results = []modelResult{{Model: "ok", Value: "7", ResponseTime: 1500 * time.Millisecond}, {Model: "bad", Error: "boom", ResponseTime: 250 * time.Millisecond, RetryCount: 2}}
+	resultView := stripANSI(m.resultListView())
+	if !strings.Contains(compactForContains(resultView), "模型juicy响应时间重试次数") {
+		t.Fatalf("expected results table headers in view: %q", resultView)
 	}
-	if !strings.Contains(resultView, errorStyle.Render("bad -> boom")) {
-		t.Fatalf("expected error result in view: %q", resultView)
+	if !strings.Contains(resultView, "ok") || !strings.Contains(resultView, "7") || !strings.Contains(resultView, "1.5s") {
+		t.Fatalf("expected successful row content in table view: %q", resultView)
+	}
+	if !strings.Contains(resultView, "bad") || !strings.Contains(resultView, "boom") || !strings.Contains(resultView, "250ms") || !strings.Contains(resultView, "2") {
+		t.Fatalf("expected error row content in table view: %q", resultView)
+	}
+}
+
+func TestResultsTableColumnWidthsPrioritizeModelColumn(t *testing.T) {
+	m := newModel(appConfig{}, "juicy-providers.json")
+	contentWidth := 60
+
+	modelWidth, juicyWidth, responseTimeWidth, retryWidth := m.resultsTableColumnWidths(contentWidth)
+
+	wantJuicyWidth := lipgloss.Width("juicy")
+	wantModelWidth := contentWidth - 6 - wantJuicyWidth - responseTimeWidth - retryWidth
+	if juicyWidth != wantJuicyWidth {
+		t.Fatalf("expected juicy column width %d, got %d", wantJuicyWidth, juicyWidth)
+	}
+	if modelWidth != wantModelWidth {
+		t.Fatalf("expected model column width %d, got %d", wantModelWidth, modelWidth)
+	}
+	if modelWidth <= juicyWidth {
+		t.Fatalf("expected model column width %d to exceed juicy width %d", modelWidth, juicyWidth)
+	}
+	if modelWidth <= 12 {
+		t.Fatalf("expected model column width %d to exceed previous cap", modelWidth)
 	}
 }
 
@@ -2211,11 +2253,8 @@ func TestFinishRunKeepsWrappedLatestResultFullyVisibleAfterStatusUpdate(t *testi
 
 	layout := m.resultPaneLayout()
 	visibleHeight := m.splitPaneVisibleContentHeight(m.listBottomContent())
-	if layout.activeEndRow-layout.activeCursorRow < 1 {
-		t.Fatalf("expected latest result to wrap across multiple rows, got start=%d end=%d", layout.activeCursorRow, layout.activeEndRow)
-	}
-	if layout.activeCursorRow < m.resultsPaneScrollOffset || layout.activeEndRow >= m.resultsPaneScrollOffset+visibleHeight {
-		t.Fatalf("expected wrapped latest result span [%d,%d] inside [%d,%d)", layout.activeCursorRow, layout.activeEndRow, m.resultsPaneScrollOffset, m.resultsPaneScrollOffset+visibleHeight)
+	if layout.activeCursorRow < m.resultsPaneScrollOffset || layout.activeCursorRow >= m.resultsPaneScrollOffset+visibleHeight {
+		t.Fatalf("expected latest result row %d inside [%d,%d)", layout.activeCursorRow, m.resultsPaneScrollOffset, m.resultsPaneScrollOffset+visibleHeight)
 	}
 }
 

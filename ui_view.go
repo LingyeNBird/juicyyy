@@ -5,8 +5,10 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -138,10 +140,11 @@ func (m appModel) formPaneBody() string {
 
 func (m appModel) formPaneSections(paneWidth int) []string {
 	if m.mode == requestSettingsMode {
-		applyRequestSettingsLocale(&m.requestPromptInput, &m.requestTimeoutInput, &m.requestRetryInput, m.lang, paneWidth)
+		applyRequestSettingsLocale(&m.requestPromptInput, &m.requestIntervalInput, &m.requestTimeoutInput, &m.requestRetryInput, m.lang, paneWidth)
 		return []string{
 			helperTextStyle.Render(m.formIntroText()),
 			m.renderFormField(requestSettingsFields[requestSettingsPromptField], m.requestPromptInput.View()),
+			m.renderFormField(requestSettingsFields[requestSettingsIntervalField], m.requestIntervalInput.View()),
 			m.renderFormField(requestSettingsFields[requestSettingsTimeoutField], m.requestTimeoutInput.View()),
 			m.renderFormField(requestSettingsFields[requestSettingsModeField], m.requestModeInputView()),
 			m.renderFormField(requestSettingsFields[requestSettingsRetryField], m.requestRetryInput.View()),
@@ -278,13 +281,10 @@ func (m appModel) resultPaneLayout() paneContentLayout {
 		}
 	}
 
-	activeIndex := maxInt(0, minInt(m.activeResult, len(m.results)-1))
-	for i, result := range m.results {
-		if result.Error != "" {
-			appendLine(errorStyle.Render(fmt.Sprintf("%s -> %s", result.Model, result.Error)), i == activeIndex)
-			continue
-		}
-		appendLine(successStyle.Render(fmt.Sprintf("%s -> %s", result.Model, result.Value)), i == activeIndex)
+	tableView := m.resultsTableView(contentWidth)
+	activeIndex := m.resultsTableHeaderLineCount(contentWidth) + maxInt(0, minInt(m.activeResult, len(m.results)-1))
+	for i, line := range strings.Split(tableView, "\n") {
+		appendLine(line, i == activeIndex)
 	}
 
 	return paneContentLayout{
@@ -355,7 +355,7 @@ func (m appModel) listPaneBorderColor(focus listPaneFocus) lipgloss.Color {
 
 func (m appModel) formIntroText() string {
 	if m.mode == requestSettingsMode {
-		return m.tr("统一管理检测请求的提示词、超时时间、接口模式和重试次数。", "Manage the prompt, timeout, API mode, and retry count used for juicy checks.")
+		return m.tr("统一管理检测请求的提示词、请求时间间隔、超时时间、接口模式和重试次数。", "Manage the prompt, request interval, timeout, API mode, and retry count used for juicy checks.")
 	}
 	if m.isEditingProvider() {
 		return m.tr("修改当前供应商的 OAI 兼容 base URL、API key，以及支持逗号或换行的模型列表。", "Update the selected provider's OAI-compatible base URL, API key, and models separated by commas or new lines.")
@@ -662,6 +662,85 @@ func (m appModel) formPaneBorderColor() lipgloss.Color {
 		return requestPaneBorderColor
 	}
 	return addProviderPaneBorderColor
+}
+
+func (m appModel) resultsTableView(contentWidth int) string {
+	tbl := m.newResultsTable(contentWidth, m.resultsTableRows())
+	return strings.TrimRight(tbl.View(), "\n")
+}
+
+func (m appModel) newResultsTable(contentWidth int, rows []table.Row) table.Model {
+	tableWidth := maxInt(contentWidth, lipgloss.Width(strings.Join([]string{
+		m.tr("模型", "Model"),
+		"juicy",
+		m.tr("响应时间", "Response Time"),
+		m.tr("重试次数", "Retries"),
+	}, " ")))
+	columns := m.resultsTableColumns(tableWidth)
+	return table.New(
+		table.WithColumns(columns),
+		table.WithRows(rows),
+		table.WithHeight(len(rows)+2),
+		table.WithWidth(tableWidth),
+	)
+}
+
+func (m appModel) resultsTableRows() []table.Row {
+	rows := make([]table.Row, 0, len(m.results))
+	for _, result := range m.results {
+		rows = append(rows, table.Row{
+			result.Model,
+			resultJuicyCell(result),
+			formatResultResponseTime(result.ResponseTime),
+			fmt.Sprintf("%d", result.RetryCount),
+		})
+	}
+	return rows
+}
+
+func (m appModel) resultsTableColumns(tableWidth int) []table.Column {
+	modelWidth, juicyWidth, responseTimeWidth, retryWidth := m.resultsTableColumnWidths(tableWidth)
+	return []table.Column{
+		{Title: m.tr("模型", "Model"), Width: modelWidth},
+		{Title: "juicy", Width: juicyWidth},
+		{Title: m.tr("响应时间", "Response Time"), Width: responseTimeWidth},
+		{Title: m.tr("重试次数", "Retries"), Width: retryWidth},
+	}
+}
+
+func (m appModel) resultsTableHeaderLineCount(contentWidth int) int {
+	headerOnly := strings.TrimRight(m.newResultsTable(maxInt(contentWidth, 1), nil).View(), "\n")
+	if strings.TrimSpace(headerOnly) == "" {
+		return 0
+	}
+	return len(strings.Split(headerOnly, "\n"))
+}
+
+func (m appModel) resultsTableColumnWidths(contentWidth int) (modelWidth, juicyWidth, responseTimeWidth, retryWidth int) {
+	const gapWidth = 6
+	responseTimeWidth = maxInt(lipgloss.Width("响应时间"), lipgloss.Width("Response Time"))
+	retryWidth = maxInt(lipgloss.Width("重试次数"), lipgloss.Width("Retries"))
+	juicyWidth = lipgloss.Width("juicy")
+	modelWidth = maxInt(maxInt(lipgloss.Width("模型"), lipgloss.Width("Model")), contentWidth-gapWidth-juicyWidth-responseTimeWidth-retryWidth)
+	return modelWidth, juicyWidth, responseTimeWidth, retryWidth
+}
+
+func resultJuicyCell(result modelResult) string {
+	if strings.TrimSpace(result.Error) != "" {
+		return result.Error
+	}
+	return result.Value
+}
+
+func formatResultResponseTime(duration time.Duration) string {
+	if duration <= 0 {
+		return "0s"
+	}
+	rounded := duration.Round(time.Millisecond)
+	if rounded <= 0 {
+		rounded = time.Millisecond
+	}
+	return rounded.String()
 }
 
 func renderShortcutFooter(text string) string {

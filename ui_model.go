@@ -56,6 +56,7 @@ const (
 
 const (
 	requestSettingsPromptField = iota
+	requestSettingsIntervalField
 	requestSettingsTimeoutField
 	requestSettingsModeField
 	requestSettingsRetryField
@@ -84,6 +85,7 @@ type appModel struct {
 	mode                     viewMode
 	editingIndex             int
 	requestPromptInput       textinput.Model
+	requestIntervalInput     textinput.Model
 	requestTimeoutInput      textinput.Model
 	requestRetryInput        textinput.Model
 	requestMode              requestMode
@@ -117,23 +119,24 @@ func newModel(cfg appConfig, configPath string) appModel {
 
 	cfg = normalizeConfig(cfg)
 	baseURLInput, apiKeyInput, modelsInput := newProviderInputs(langZH)
-	requestPromptInput, requestTimeoutInput, requestRetryInput := newRequestSettingsInputs(langZH, cfg.RequestSettings)
+	requestPromptInput, requestTimeoutInput, requestRetryInput, requestIntervalInput := newRequestSettingsInputs(langZH, cfg.RequestSettings)
 	m := appModel{
-		config:              cfg,
-		configPath:          configPath,
-		lang:                langZH,
-		mode:                listMode,
-		editingIndex:        noEditingProviderIndex,
-		requestPromptInput:  requestPromptInput,
-		requestTimeoutInput: requestTimeoutInput,
-		requestRetryInput:   requestRetryInput,
-		requestMode:         cfg.RequestSettings.Mode,
-		listPaneFocus:       providerPaneFocus,
-		baseURLInput:        baseURLInput,
-		apiKeyInput:         apiKeyInput,
-		modelsInput:         modelsInput,
-		spinner:             spin,
-		concurrency:         5,
+		config:               cfg,
+		configPath:           configPath,
+		lang:                 langZH,
+		mode:                 listMode,
+		editingIndex:         noEditingProviderIndex,
+		requestPromptInput:   requestPromptInput,
+		requestIntervalInput: requestIntervalInput,
+		requestTimeoutInput:  requestTimeoutInput,
+		requestRetryInput:    requestRetryInput,
+		requestMode:          cfg.RequestSettings.Mode,
+		listPaneFocus:        providerPaneFocus,
+		baseURLInput:         baseURLInput,
+		apiKeyInput:          apiKeyInput,
+		modelsInput:          modelsInput,
+		spinner:              spin,
+		concurrency:          5,
 	}
 	m.setStatus(statusInfo, fmt.Sprintf("配置文件：%s", configPath))
 	return m

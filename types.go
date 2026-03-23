@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 type requestMode string
 
 const (
@@ -14,10 +16,11 @@ type provider struct {
 }
 
 type requestSettings struct {
-	Prompt         string      `json:"prompt"`
-	TimeoutSeconds int         `json:"timeout_seconds"`
-	Mode           requestMode `json:"mode"`
-	RetryCount     int         `json:"retry_count"`
+	Prompt          string      `json:"prompt"`
+	TimeoutSeconds  int         `json:"timeout_seconds"`
+	Mode            requestMode `json:"mode"`
+	RetryCount      int         `json:"retry_count"`
+	IntervalSeconds float64     `json:"interval_seconds"`
 }
 
 type appConfig struct {
@@ -26,7 +29,9 @@ type appConfig struct {
 }
 
 type modelResult struct {
-	Model string
-	Value string
-	Error string
+	Model        string
+	Value        string
+	Error        string
+	RetryCount   int
+	ResponseTime time.Duration
 }

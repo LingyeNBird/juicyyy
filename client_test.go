@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +15,13 @@ import (
 
 func testRequestSettings() requestSettings {
 	return defaultRequestSettings()
+}
+
+func assertModelResultCore(t *testing.T, got modelResult, want modelResult) {
+	t.Helper()
+	if got.Model != want.Model || got.Value != want.Value || got.Error != want.Error {
+		t.Fatalf("unexpected result core fields: got %+v want %+v", got, want)
+	}
 }
 
 func TestSplitModels(t *testing.T) {
@@ -157,6 +165,12 @@ func TestCheckModelRetriesZeroAndKeepsHighest(t *testing.T) {
 	if result.Value != "7.5" {
 		t.Fatalf("unexpected value: got %q want %q", result.Value, "7.5")
 	}
+	if result.RetryCount != testRequestSettings().RetryCount {
+		t.Fatalf("expected retry count %d, got %d", testRequestSettings().RetryCount, result.RetryCount)
+	}
+	if result.ResponseTime <= 0 {
+		t.Fatalf("expected positive response time, got %s", result.ResponseTime)
+	}
 	if got := calls.Load(); got != 6 {
 		t.Fatalf("unexpected call count: got %d want 6", got)
 	}
@@ -178,6 +192,12 @@ func TestCheckModelRetriesNonnumericAndKeepsHighest(t *testing.T) {
 	}
 	if result.Value != "4" {
 		t.Fatalf("unexpected value: got %q want %q", result.Value, "4")
+	}
+	if result.RetryCount != testRequestSettings().RetryCount {
+		t.Fatalf("expected retry count %d, got %d", testRequestSettings().RetryCount, result.RetryCount)
+	}
+	if result.ResponseTime <= 0 {
+		t.Fatalf("expected positive response time, got %s", result.ResponseTime)
 	}
 	if got := calls.Load(); got != 6 {
 		t.Fatalf("unexpected call count: got %d want 6", got)
@@ -201,6 +221,12 @@ func TestCheckModelReturnsErrorWhenAllRetryableAttemptsFail(t *testing.T) {
 	if result.Error != "" {
 		t.Fatalf("unexpected error: %s", result.Error)
 	}
+	if result.RetryCount != testRequestSettings().RetryCount {
+		t.Fatalf("expected retry count %d, got %d", testRequestSettings().RetryCount, result.RetryCount)
+	}
+	if result.ResponseTime <= 0 {
+		t.Fatalf("expected positive response time, got %s", result.ResponseTime)
+	}
 	if got := calls.Load(); got != 6 {
 		t.Fatalf("unexpected call count: got %d want 6", got)
 	}
@@ -223,8 +249,80 @@ func TestCheckModelDoesNotRetryAPIErrors(t *testing.T) {
 	if result.Error != "API 429: rate limit" {
 		t.Fatalf("unexpected error: got %q", result.Error)
 	}
+	if result.RetryCount != 0 {
+		t.Fatalf("expected retry count 0, got %d", result.RetryCount)
+	}
+	if result.ResponseTime <= 0 {
+		t.Fatalf("expected positive response time, got %s", result.ResponseTime)
+	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("unexpected call count: got %d want 1", got)
+	}
+}
+
+func TestCheckModelAppliesRequestIntervalAndTracksActualRetryCount(t *testing.T) {
+	responses := []string{"0", "2"}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		index := int(calls.Add(1)) - 1
+		fmt.Fprintf(w, `{"choices":[{"message":{"content":%q}}]}`, responses[index])
+	}))
+	defer server.Close()
+
+	settings := testRequestSettings()
+	settings.RetryCount = 1
+	settings.IntervalSeconds = 0.05
+
+	result := checkModel(context.Background(), server.Client(), provider{BaseURL: server.URL}, "demo-model", settings)
+
+	if result.Error != "" {
+		t.Fatalf("unexpected error: %s", result.Error)
+	}
+	if result.Value != "2" {
+		t.Fatalf("unexpected value: got %q want %q", result.Value, "2")
+	}
+	if result.RetryCount != 1 {
+		t.Fatalf("expected retry count 1, got %d", result.RetryCount)
+	}
+	if result.ResponseTime < 35*time.Millisecond || result.ResponseTime > 80*time.Millisecond {
+		t.Fatalf("expected response time to reflect request work without interval wait, got %s", result.ResponseTime)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("unexpected call count: got %d want 2", got)
+	}
+}
+
+func TestRunJuicyChecksAppliesRequestIntervalAcrossConcurrentWorkers(t *testing.T) {
+	var (
+		mu        sync.Mutex
+		requestAt []time.Time
+	)
+	selected := provider{
+		BaseURL: serverURL(t, func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			requestAt = append(requestAt, time.Now())
+			mu.Unlock()
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"1"}}]}`)
+		}),
+		Models: []string{"first", "second"},
+	}
+
+	settings := testRequestSettings()
+	settings.IntervalSeconds = 0.05
+	settings.RetryCount = 0
+
+	results := runJuicyChecks(context.Background(), selected, settings, 2, nil)
+	if len(results) != 2 {
+		t.Fatalf("unexpected results length: got %d want 2", len(results))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(requestAt) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(requestAt))
+	}
+	if delta := requestAt[1].Sub(requestAt[0]); delta < 45*time.Millisecond {
+		t.Fatalf("expected request interval to space concurrent workers, got %s", delta)
 	}
 }
 
@@ -264,8 +362,12 @@ func TestRunJuicyChecksPreservesModelOrder(t *testing.T) {
 	}
 	want := []modelResult{{Model: "slow", Value: "1"}, {Model: "fast", Value: "2"}, {Model: "medium", Value: "3"}}
 	for i := range want {
-		if results[i] != want[i] {
-			t.Fatalf("unexpected result at %d: got %+v want %+v", i, results[i], want[i])
+		assertModelResultCore(t, results[i], want[i])
+		if results[i].RetryCount != 0 {
+			t.Fatalf("expected retry count 0 for result %d, got %d", i, results[i].RetryCount)
+		}
+		if results[i].ResponseTime <= 0 {
+			t.Fatalf("expected positive response time for result %d, got %s", i, results[i].ResponseTime)
 		}
 	}
 }
@@ -317,11 +419,13 @@ func TestRunJuicyChecksReportsProgressForSuccessAndFailure(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("unexpected results length: got %d want 2", len(results))
 	}
-	if results[0] != (modelResult{Model: "ok-model", Value: "7"}) {
-		t.Fatalf("unexpected first result: %+v", results[0])
+	assertModelResultCore(t, results[0], modelResult{Model: "ok-model", Value: "7"})
+	assertModelResultCore(t, results[1], modelResult{Model: "bad-model", Error: "API 429: rate limit"})
+	if results[0].ResponseTime <= 0 || results[1].ResponseTime <= 0 {
+		t.Fatalf("expected positive response times, got %+v", results)
 	}
-	if results[1] != (modelResult{Model: "bad-model", Error: "API 429: rate limit"}) {
-		t.Fatalf("unexpected second result: %+v", results[1])
+	if results[0].RetryCount != 0 || results[1].RetryCount != 0 {
+		t.Fatalf("expected retry counts to stay at 0, got %+v", results)
 	}
 }
 

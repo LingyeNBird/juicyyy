@@ -279,7 +279,7 @@ func (m *appModel) enterRequestSettingsMode() {
 	m.editingIndex = noEditingProviderIndex
 	m.preloadRequestSettingsForm(m.config.RequestSettings)
 	m.syncProviderPaneScroll(paneScrollDirectionNeutral)
-	m.setStatus(statusInfo, m.tr("请求设置：修改提示词、超时、请求方式与重试次数；按 Ctrl+S 保存，Esc 取消。", "Request settings: update the prompt, timeout, request mode, and retries; press Ctrl+S to save, or Esc to cancel."))
+	m.setStatus(statusInfo, m.tr("请求设置：修改提示词、请求时间间隔、超时、请求方式与重试次数；按 Ctrl+S 保存，Esc 取消。", "Request settings: update the prompt, request interval, timeout, request mode, and retry count; press Ctrl+S to save, or Esc to cancel."))
 }
 
 func (m appModel) submitRequestSettingsForm() (tea.Model, tea.Cmd) {
@@ -362,11 +362,17 @@ func (m *appModel) buildRequestSettingsFromInputs() (requestSettings, error) {
 		return requestSettings{}, fmt.Errorf(m.tr("重试次数无效：%v", "Invalid retry count: %v"), err)
 	}
 
+	intervalSeconds, err := parseNonNegativeFloat(m.requestIntervalInput.Value())
+	if err != nil {
+		return requestSettings{}, fmt.Errorf(m.tr("请求时间间隔无效：%v", "Invalid request interval: %v"), err)
+	}
+
 	return normalizeRequestSettings(requestSettings{
-		Prompt:         prompt,
-		TimeoutSeconds: timeoutSeconds,
-		Mode:           m.requestMode,
-		RetryCount:     retryCount,
+		Prompt:          prompt,
+		IntervalSeconds: intervalSeconds,
+		TimeoutSeconds:  timeoutSeconds,
+		Mode:            m.requestMode,
+		RetryCount:      retryCount,
 	}), nil
 }
 
@@ -385,6 +391,21 @@ func parseNonNegativeInt(raw string) (int, error) {
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
 		return 0, errors.New("must be a whole number")
+	}
+	if value < 0 {
+		return 0, errors.New("must be 0 or greater")
+	}
+	return value, nil
+}
+
+func parseNonNegativeFloat(raw string) (float64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseFloat(trimmed, 64)
+	if err != nil {
+		return 0, errors.New("must be a number")
 	}
 	if value < 0 {
 		return 0, errors.New("must be 0 or greater")

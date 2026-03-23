@@ -115,10 +115,11 @@ func TestSaveConfigPersistsRequestSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "request-settings.json")
 	cfg := appConfig{
 		RequestSettings: requestSettings{
-			Prompt:         "edited juicy prompt",
-			TimeoutSeconds: 240,
-			Mode:           requestModeResponses,
-			RetryCount:     2,
+			Prompt:          "edited juicy prompt",
+			IntervalSeconds: 0.25,
+			TimeoutSeconds:  240,
+			Mode:            requestModeResponses,
+			RetryCount:      2,
 		},
 	}
 
@@ -132,6 +133,20 @@ func TestSaveConfigPersistsRequestSettings(t *testing.T) {
 	}
 	if loaded.RequestSettings != cfg.RequestSettings {
 		t.Fatalf("unexpected request settings: got %+v want %+v", loaded.RequestSettings, cfg.RequestSettings)
+	}
+}
+
+func TestNormalizeRequestSettingsClampsNegativeIntervalToZero(t *testing.T) {
+	got := normalizeRequestSettings(requestSettings{
+		Prompt:          "edited juicy prompt",
+		TimeoutSeconds:  240,
+		Mode:            requestModeResponses,
+		RetryCount:      2,
+		IntervalSeconds: -0.5,
+	})
+
+	if got.IntervalSeconds != 0 {
+		t.Fatalf("expected interval to normalize to 0, got %v", got.IntervalSeconds)
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -11,10 +12,11 @@ import (
 
 func defaultRequestSettings() requestSettings {
 	return requestSettings{
-		Prompt:         juicyPrompt,
-		TimeoutSeconds: 180,
-		Mode:           requestModeCompatible,
-		RetryCount:     5,
+		Prompt:          juicyPrompt,
+		IntervalSeconds: 0,
+		TimeoutSeconds:  180,
+		Mode:            requestModeCompatible,
+		RetryCount:      5,
 	}
 }
 
@@ -23,6 +25,9 @@ func normalizeRequestSettings(settings requestSettings) requestSettings {
 	settings.Prompt = strings.TrimSpace(settings.Prompt)
 	if settings.Prompt == "" {
 		settings.Prompt = defaults.Prompt
+	}
+	if math.IsNaN(settings.IntervalSeconds) || math.IsInf(settings.IntervalSeconds, 0) || settings.IntervalSeconds < 0 {
+		settings.IntervalSeconds = defaults.IntervalSeconds
 	}
 	if settings.TimeoutSeconds <= 0 {
 		settings.TimeoutSeconds = defaults.TimeoutSeconds

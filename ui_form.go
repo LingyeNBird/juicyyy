@@ -19,7 +19,7 @@ func newProviderInputs(lang appLanguage) (textinput.Model, textinput.Model, text
 	return baseURLInput, apiKeyInput, modelsInput
 }
 
-func newRequestSettingsInputs(lang appLanguage, settings requestSettings) (textinput.Model, textinput.Model, textinput.Model) {
+func newRequestSettingsInputs(lang appLanguage, settings requestSettings) (textinput.Model, textinput.Model, textinput.Model, textinput.Model) {
 	settings = normalizeRequestSettings(settings)
 	promptInput := newInput(inputKindText)
 	promptInput.CharLimit = 0
@@ -34,8 +34,16 @@ func newRequestSettingsInputs(lang appLanguage, settings requestSettings) (texti
 	retryInput.SetValue(strconv.Itoa(settings.RetryCount))
 	retryInput.Blur()
 
-	applyRequestSettingsLocale(&promptInput, &timeoutInput, &retryInput, lang, formPaneWidth(0))
-	return promptInput, timeoutInput, retryInput
+	intervalInput := newInput(inputKindText)
+	intervalInput.SetValue(formatDecimalInputValue(settings.IntervalSeconds))
+	intervalInput.Blur()
+
+	applyRequestSettingsLocale(&promptInput, &intervalInput, &timeoutInput, &retryInput, lang, formPaneWidth(0))
+	return promptInput, timeoutInput, retryInput, intervalInput
+}
+
+func formatDecimalInputValue(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 func newInput(kind inputKind) textinput.Model {
@@ -126,6 +134,11 @@ func (m appModel) updateRequestSettingsInputs(msg tea.Msg) (tea.Model, tea.Cmd) 
 	case requestSettingsRetryField:
 		var cmd tea.Cmd
 		m.requestRetryInput, cmd = m.requestRetryInput.Update(msg)
+		m.syncFormPaneScroll()
+		return m, cmd
+	case requestSettingsIntervalField:
+		var cmd tea.Cmd
+		m.requestIntervalInput, cmd = m.requestIntervalInput.Update(msg)
 		m.syncFormPaneScroll()
 		return m, cmd
 	case requestSettingsModeField:
@@ -418,6 +431,8 @@ func (m *appModel) preloadRequestSettingsForm(settings requestSettings) {
 	m.requestTimeoutInput.Blur()
 	m.requestRetryInput.SetValue(strconv.Itoa(settings.RetryCount))
 	m.requestRetryInput.Blur()
+	m.requestIntervalInput.SetValue(formatDecimalInputValue(settings.IntervalSeconds))
+	m.requestIntervalInput.Blur()
 	m.requestMode = settings.Mode
 	m.focusIndex = requestSettingsPromptField
 	m.formPaneScrollOffset = 0
@@ -468,6 +483,8 @@ func (m *appModel) blurFocusedInput() {
 			m.requestTimeoutInput.Blur()
 		case requestSettingsRetryField:
 			m.requestRetryInput.Blur()
+		case requestSettingsIntervalField:
+			m.requestIntervalInput.Blur()
 		}
 		return
 	}
@@ -491,6 +508,8 @@ func (m *appModel) focusCurrentInput() {
 			m.requestTimeoutInput.Focus()
 		case requestSettingsRetryField:
 			m.requestRetryInput.Focus()
+		case requestSettingsIntervalField:
+			m.requestIntervalInput.Focus()
 		}
 		return
 	}

@@ -87,11 +87,55 @@ type responsesContentPart struct {
 }
 
 type attemptOutcome struct {
-	value      float64
-	formatted  string
-	errorMsg   string
-	retryable  bool
-	hasNumeric bool
+	value        float64
+	formatted    string
+	errorMsg     string
+	retryable    bool
+	hasNumeric   bool
+	ResponseTime time.Duration
+}
+
+type requestIntervalGate struct {
+	interval time.Duration
+	mu       sync.Mutex
+	next     time.Time
+}
+
+func newRequestIntervalGate(intervalSeconds float64) *requestIntervalGate {
+	if intervalSeconds <= 0 {
+		return nil
+	}
+	interval := time.Duration(intervalSeconds * float64(time.Second))
+	if interval <= 0 {
+		return nil
+	}
+	return &requestIntervalGate{interval: interval}
+}
+
+func (g *requestIntervalGate) Wait(ctx context.Context) error {
+	if g == nil || g.interval <= 0 {
+		return nil
+	}
+
+	for {
+		g.mu.Lock()
+		now := time.Now()
+		wait := g.next.Sub(now)
+		if wait <= 0 {
+			g.next = now.Add(g.interval)
+			g.mu.Unlock()
+			return nil
+		}
+		g.mu.Unlock()
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("request failed: %v", ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func runJuicyChecks(ctx context.Context, selected provider, settings requestSettings, concurrency int, onProgress func(completed, total int)) []modelResult {
@@ -122,6 +166,7 @@ func runJuicyChecks(ctx context.Context, selected provider, settings requestSett
 	}
 	var wg sync.WaitGroup
 	var completedChecks atomic.Int32
+	requestGate := newRequestIntervalGate(settings.IntervalSeconds)
 
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
@@ -129,7 +174,7 @@ func runJuicyChecks(ctx context.Context, selected provider, settings requestSett
 			defer wg.Done()
 			for index := range jobs {
 				modelName := selected.Models[index]
-				results[index] = checkModel(ctx, httpClient, selected, modelName, settings)
+				results[index] = checkModelWithGate(ctx, httpClient, selected, modelName, settings, requestGate)
 				if onProgress != nil {
 					onProgress(int(completedChecks.Add(1)), totalModels)
 				}
@@ -147,9 +192,27 @@ func runJuicyChecks(ctx context.Context, selected provider, settings requestSett
 }
 
 func checkModel(ctx context.Context, httpClient *http.Client, selected provider, modelName string, settings requestSettings) modelResult {
+	return checkModelWithGate(ctx, httpClient, selected, modelName, settings, newRequestIntervalGate(settings.IntervalSeconds))
+}
+
+func checkModelWithGate(ctx context.Context, httpClient *http.Client, selected provider, modelName string, settings requestSettings, requestGate *requestIntervalGate) (result modelResult) {
 	settings = normalizeRequestSettings(settings)
-	result := modelResult{Model: modelName}
-	initial := runSingleAttempt(ctx, httpClient, selected, modelName, settings)
+	retryCount := 0
+	responseTime := time.Duration(0)
+	result = modelResult{Model: modelName}
+	defer func() {
+		if responseTime <= 0 {
+			responseTime = time.Millisecond
+		}
+		result.RetryCount = retryCount
+		result.ResponseTime = responseTime
+	}()
+	initial, initialErr := runSingleAttemptWithGate(ctx, httpClient, selected, modelName, settings, requestGate)
+	if initialErr != nil {
+		result.Error = initialErr.Error()
+		return result
+	}
+	responseTime += initial.ResponseTime
 	if !initial.retryable {
 		if initial.hasNumeric {
 			result.Value = initial.formatted
@@ -169,7 +232,13 @@ func checkModel(ctx context.Context, httpClient *http.Client, selected provider,
 	}
 
 	for attempt := 0; attempt < settings.RetryCount; attempt++ {
-		outcome := runSingleAttempt(ctx, httpClient, selected, modelName, settings)
+		outcome, err := runSingleAttemptWithGate(ctx, httpClient, selected, modelName, settings, requestGate)
+		if err != nil {
+			lastError = err.Error()
+			break
+		}
+		retryCount++
+		responseTime += outcome.ResponseTime
 		if outcome.hasNumeric && outcome.value > bestValue {
 			bestValue = outcome.value
 			bestFormatted = outcome.formatted
@@ -189,6 +258,19 @@ func checkModel(ctx context.Context, httpClient *http.Client, selected provider,
 	}
 	result.Error = lastError
 	return result
+}
+
+func runSingleAttemptWithGate(ctx context.Context, httpClient *http.Client, selected provider, modelName string, settings requestSettings, requestGate *requestIntervalGate) (attemptOutcome, error) {
+	if err := requestGate.Wait(ctx); err != nil {
+		return attemptOutcome{}, err
+	}
+	startedAt := time.Now()
+	outcome := runSingleAttempt(ctx, httpClient, selected, modelName, settings)
+	outcome.ResponseTime = time.Since(startedAt)
+	if outcome.ResponseTime <= 0 {
+		outcome.ResponseTime = time.Millisecond
+	}
+	return outcome, nil
 }
 
 func runSingleAttempt(ctx context.Context, httpClient *http.Client, selected provider, modelName string, settings requestSettings) attemptOutcome {
